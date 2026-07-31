@@ -25,9 +25,6 @@
 ; 5. 引入外部符号 (相当于 C 语言的 extern，我们要访问 C 里的变量)
     IMPORT  CurrentTCB  ; 在 C 里定义的全局变量叫 CurrentTCB
     IMPORT  NextTCB
-	IMPORT  g_CtxSwStart
-    IMPORT  g_CtxSwEnd
-    IMPORT  g_CtxSwReady
 
 
 ;===============================================================================
@@ -42,13 +39,6 @@ PendSV_Handler  PROC  ; PROC代表函数的开头
     CPSID I ; 关中断
     MRS R0, PSP
     ISB ; 指令同步隔离，确保程序生效
-
-    ; ===== 记录起始时刻 =====
-    LDR     R2, =0xE0001004        ; DWT_CYCCNT 地址
-    LDR     R3, [R2]               ; 读取当前周期数
-    LDR     R2, =g_CtxSwStart
-    STR     R3, [R2]               ; g_CtxSwStart = DWT_CYCCNT
-
 
     LDR R2, =CurrentTCB ; 现在R2里存的是CurrentTCB的地址
     LDR R1, [R2] ; 把R2（CurrentTCB）地址中所存的值（就是TCB的首地址，也就是sp变量的地址）存到R1里
@@ -67,15 +57,6 @@ RestoreContext
     LDR R0, [R1] ; 从R1（NextTCB的sp变量）所对应的内存中读取NextTCB（实际上就是CurrentTCB）的sp变量到R0
     LDMIA R0!, {R4-R11}
     MSR PSP, R0
-
-    ; ===== 记录结束时刻 =====
-    LDR     R2, =0xE0001004        ; DWT_CYCCNT 地址
-    LDR     R3, [R2]               ; 读取当前周期数
-    LDR     R2, =g_CtxSwEnd
-    STR     R3, [R2]               ; g_CtxSwEnd = DWT_CYCCNT
-    LDR     R2, =g_CtxSwReady
-    MOV     R3, #1
-    STRB    R3, [R2]               ; g_CtxSwReady = 1
 
     ORR LR, LR, #0x04   ; 将LR的第2位置1，返回时使用PSP
     CPSIE I

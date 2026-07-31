@@ -34,12 +34,7 @@
 #define __OS_CORE_H
 
 #include "os_cpu.h"
-#include "benchmark.h"
 #include <string.h> // For memcpy
-
-#ifdef __BENCHMARK_H
-extern Benchmark_t g_bm_prio_find;
-#endif
 
 /** @addtogroup Core 核心管理
  *  @{
@@ -195,21 +190,23 @@ typedef struct MemBlock
 /* 全局变量声明 -------------------------------------------------------- */
 extern volatile uint32_t g_SystemTickCount;
 extern volatile uint32_t g_PrioMap;
+extern volatile uint8_t g_OSRunning;
 extern OS_List ReadyList[OS_MAX_PRIO];
 extern OS_List DelayList;
 extern OS_TCB *CurrentTCB;
 extern OS_TCB *NextTCB;
 
-#ifdef __BENCHMARK_H
-/* DWT Benchmark 打点变量 */
-extern volatile uint32_t g_CtxSwStart;   ///< 上下文切换起始时刻
-extern volatile uint32_t g_CtxSwEnd;     ///< 上下文切换结束时刻
-extern volatile uint8_t  g_CtxSwReady;   ///< 标志：本次测量完成
-
-#endif
-
-
 /* 函数声明 ----------------------------------------------------------- */
+
+/* Intrusive list helpers used by the kernel and isolated benchmark. */
+void List_Init(OS_List *list);
+void List_InsertTail(OS_List *list, OS_TCB *tcb);
+void List_Remove(OS_List *list, OS_TCB *tcb);
+OS_TCB *List_PopHead(OS_List *list);
+
+/* DelayTicks is relative to the preceding node in a delay list. */
+void OS_DelayListInsert(OS_List *list, OS_TCB *tcb, uint32_t ticks);
+void OS_DelayListAdvance(OS_List *list);
 
 /** @addtogroup Task
  *  @{

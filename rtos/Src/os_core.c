@@ -6,9 +6,9 @@
  * @date    2025-12-14
  * @brief   RTOS 内核核心逻辑实现
  *
- * 本文件包�?RTOS 的独立于硬件的逻辑实现�?
+ * 本文件包含RTOS 的独立于硬件的逻辑实现：
  * - OS 初始化与启动逻辑 (OS_Init, OS_Start)
- * - 任务调度器算�?(Scheduler) 实现
+ * - 任务调度器算法 (Scheduler) 实现
  * - SysTick 时钟节拍处理 (Timebase management)
  * - 阻塞延时处理 (osDelay) 与就绪表管理
  *
@@ -16,16 +16,19 @@
  */
 
 #include "os_core.h"
+#include "benchmark.h"
+
+#include <stdio.h>
 
 /* 变量定义 ------------------------------------------------------ */
 
-volatile uint32_t g_SystemTickCount = 0; // 系统心跳计数�?
+volatile uint32_t g_SystemTickCount = 0; // 系统心跳计数器
 
 volatile uint32_t g_CriticalNesting = 0; // 临界区嵌套计数器
 
 volatile uint32_t g_PrioMap = 0; // 任务位图
 
-volatile uint8_t g_OSRunning = FALSE; // 任务启动标志�?
+volatile uint8_t g_OSRunning = FALSE; // 任务启动标志
 
 OS_List ReadyList[OS_MAX_PRIO]; // 任务就绪链表
 OS_List DelayList;              // 有序延时链表
@@ -36,21 +39,13 @@ OS_TCB *NextTCB = NULL;
 OS_TCB IdleTaskTCB;
 uint32_t IdleTaskStack[IDLE_STACK_SIZE];
 
-#ifdef __BENCHMARK_H
-
-volatile uint32_t g_CtxSwStart  = 0;
-volatile uint32_t g_CtxSwEnd    = 0;
-volatile uint8_t  g_CtxSwReady  = 0;
-Benchmark_t g_bm_prio_find;
-
-#endif
-
 /* 私有函数定义 ------------------------------------------------------ */
 void OS_CheckStackOverflow(void)
 {
-    if(CurrentTCB == NULL) return;
+    if (CurrentTCB == NULL)
+        return;
 
-    if(*(CurrentTCB->stackLimit) != OS_STACK_MAGIC_VAL || CurrentTCB->stackPtr <= CurrentTCB->stackLimit)
+    if (*(CurrentTCB->stackLimit) != OS_STACK_MAGIC_VAL || CurrentTCB->stackPtr <= CurrentTCB->stackLimit)
     {
         OS_Disable_IRQ();
         OS_ASSERT(0);
@@ -61,18 +56,7 @@ OS_TCB *FindNextTask(void)
 {
     OS_ASSERT(g_PrioMap != 0);
 
-#ifdef __BENCHMARK_H
-    uint32_t prio_start = DWT_GetCycles();
-#endif
     uint8_t TopPrio = OS_GetTopPrio(g_PrioMap);
-#ifdef __BENCHMARK_H
-    uint32_t prio_elapsed = DWT_GetCycles() - prio_start;
-    if (prio_elapsed > BENCHMARK_PROBE_OVERHEAD)
-    {
-        prio_elapsed -= BENCHMARK_PROBE_OVERHEAD;
-    }
-    Benchmark_Record(&g_bm_prio_find, prio_elapsed);
-#endif
 
     OS_TCB *next_task = ReadyList[TopPrio].Head;
     OS_ASSERT(next_task != NULL);
@@ -96,13 +80,13 @@ void List_InsertTail(OS_List *list, OS_TCB *tcb)
 {
     OS_ASSERT(list != NULL && tcb != NULL);
     tcb->Next = NULL;
-    if (list->Head == NULL) // 如果之前链表是空�?
+    if (list->Head == NULL) // 如果之前链表是空的
     {
         list->Head = tcb;
         list->Tail = tcb; // 链表头尾都是tcb
-        tcb->Prev = NULL; // tcb前面没东�?
+        tcb->Prev = NULL; // tcb前面没东西
     }
-    else // 如果之前链表有东�?
+    else // 如果之前链表有东西
     {
         list->Tail->Next = tcb;
         tcb->Prev = list->Tail;
@@ -143,6 +127,59 @@ OS_TCB *List_PopHead(OS_List *list)
     return head;
 }
 
+void OS_DelayListInsert(OS_List *list, OS_TCB *tcb, uint32_t ticks)
+{
+    OS_TCB *iter;
+
+    OS_ASSERT(list != NULL && tcb != NULL);
+
+    if (list->Head == NULL)
+    {
+        tcb->DelayTicks = ticks;
+        List_InsertTail(list, tcb);
+        return;
+    }
+
+    iter = list->Head;
+    while (iter != NULL && ticks >= iter->DelayTicks)
+    {
+        ticks -= iter->DelayTicks;
+        iter = iter->Next;
+    }
+
+    tcb->DelayTicks = ticks;
+    if (iter == NULL)
+    {
+        List_InsertTail(list, tcb);
+    }
+    else if (iter == list->Head)
+    {
+        iter->DelayTicks -= ticks;
+        tcb->Next = iter;
+        iter->Prev = tcb;
+        tcb->Prev = NULL;
+        list->Head = tcb;
+    }
+    else
+    {
+        iter->DelayTicks -= ticks;
+        tcb->Next = iter;
+        tcb->Prev = iter->Prev;
+        iter->Prev->Next = tcb;
+        iter->Prev = tcb;
+    }
+}
+
+void OS_DelayListAdvance(OS_List *list)
+{
+    OS_ASSERT(list != NULL);
+
+    if (list->Head != NULL && list->Head->DelayTicks > 0U)
+    {
+        list->Head->DelayTicks--;
+    }
+}
+
 void OS_ReadyListAdd(OS_TCB *tcb)
 {
     OS_ASSERT(tcb != NULL);
@@ -158,33 +195,32 @@ void OS_ReadyListRemove(OS_TCB *tcb)
         g_PrioMap &= ~(1U << tcb->Priority);
 }
 
-
 void OS_TaskSuspend(OS_List *p_wait_list)
 {
     OS_ASSERT(p_wait_list != NULL);
 
     if (g_OSRunning == FALSE)
-        return; 
-    
+        return;
+
     CurrentTCB->State = TASK_BLOCKED;
     OS_ReadyListRemove(CurrentTCB);
     List_InsertTail(p_wait_list, CurrentTCB);
-    
+
     NextTCB = FindNextTask();
     OS_Schedule();
 }
 
-OS_TCB* OS_TaskResume(OS_List *p_wait_list)
+OS_TCB *OS_TaskResume(OS_List *p_wait_list)
 {
     OS_ASSERT(p_wait_list != NULL);
-    
+
     if (p_wait_list->Head == NULL)
         return NULL;
-    
+
     OS_TCB *TaskToWake = List_PopHead(p_wait_list);
     TaskToWake->State = TASK_READY;
     OS_ReadyListAdd(TaskToWake);
-    
+
     return TaskToWake;
 }
 
@@ -204,7 +240,7 @@ OS_Status OS_TaskCreate(OS_TCB *tcb, OS_TaskFunc_t task_function, void *task_par
     if (tcb == NULL || task_function == NULL || stack_init_address == NULL || priority > OS_MAX_PRIO - 1)
         return OS_ERR_PARAM;
     tcb->stackPtr = OS_StackInit(task_function, task_param, stack_init_address, stack_depth);
-    
+
     tcb->stackLimit = stack_init_address;
     *(tcb->stackLimit) = OS_STACK_MAGIC_VAL;
 
@@ -223,18 +259,15 @@ void OS_Init(void)
     g_OSRunning = FALSE;
     g_SystemTickCount = 0;
     g_CriticalNesting = 0;
-#ifdef __BENCHMARK_H
-    Benchmark_Init(&g_bm_prio_find);
-#endif
     g_PrioMap = 0; // 清空位图
 
-    // 2. 初始化就绪链�?
+    // 2. 初始化就绪链表
     for (int i = 0; i < OS_MAX_PRIO; i++)
     {
         List_Init(&ReadyList[i]);
     }
 
-    // 3. 初始化延时链�?
+    // 3. 初始化延时链表
     List_Init(&DelayList);
 
     // 4. 创建空闲任务
@@ -243,21 +276,21 @@ void OS_Init(void)
 
 void OS_StartScheduler(void)
 {
-    // 1. 此时 CurrentTCB 肯定不为 NULL 了，原来的防御性检查可以删�?
+    // 1. 此时 CurrentTCB 肯定不为 NULL 了，原来的防御性检查可以删除
     // if (CurrentTCB == NULL) return;
 
-    // 2. 关键步骤：设�?NextTCB 为第一个要运行的任�?
+    // 2. 关键步骤：设置 NextTCB 为第一个要运行的任务
     NextTCB = FindNextTask();
 
-    // 3. 关键步骤：欺�?PendSV
-    // �?CurrentTCB 暂时设为 NULL�?
-    // 这样 PendSV 里的 "CMP R1, #0" 就会成立，从而跳�?STMDB (保存上下�?�?
-    // 直接执行 RestoreContext (恢复 NextTCB 的上下文)�?
+    // 3. 关键步骤：欺骗 PendSV
+    // 把 CurrentTCB 暂时设为 NULL
+    // 这样 PendSV 里的 "CMP R1, #0" 就会成立，从而跳转到 STMDB (保存上下文)
+    // 直接执行 RestoreContext (恢复 NextTCB 的上下文)
     CurrentTCB = NULL;
 
-    // 4. 初始�?SysTick (开启时间片，开�?1ms 中断)
-    // 注意：SysTick_Handler 里有一�?if(CurrentTCB != NULL)�?
-    // 所以在 PendSV 执行完之前，SysTick 即使触发了也不会乱调度�?
+    // 4. 初始化 SysTick (开启时间片，开启 1ms 中断)
+    // 注意：SysTick_Handler 里有一个 if(CurrentTCB != NULL)
+    // 所以在 PendSV 执行完之前，SysTick 即使触发了也不会乱调度
     OS_Init_Timer(1);
 
     // 打开开关！
@@ -266,34 +299,44 @@ void OS_StartScheduler(void)
     // 5. 触发 PendSV，开始第一次切换！
     OS_Schedule();
 
-    // 6. 应该永远不会执行到这�?
+    // 6. 应该永远不会执行到这里
     while (1)
         ;
 }
 
 void OS_Tick_Handler(void)
 {
+#if OS_BENCHMARK_ENABLE
+    uint8_t benchmark_tick_active;
+    uint32_t benchmark_tick_start = 0U;
+#endif
+
     if (g_OSRunning != TRUE)
         return;
 
-    // 1. 安全检�?
+#if OS_BENCHMARK_ENABLE
+    benchmark_tick_active = g_BenchmarkRuntimeActive;
+    if (benchmark_tick_active != FALSE)
+    {
+        benchmark_tick_start = DWT->CYCCNT;
+    }
+#endif
+
+    // 1. 安全检查
     OS_ASSERT(CurrentTCB != NULL);
 
-    OS_CheckStackOverflow(); // 栈溢出检�?
+    OS_CheckStackOverflow(); // 栈溢出检查
 
     // 2. 更新系统时间
     g_SystemTickCount++;
 
-    if (DelayList.Head != NULL)
+    OS_DelayListAdvance(&DelayList);
+    while (DelayList.Head != NULL && DelayList.Head->DelayTicks == 0U)
     {
-        if (DelayList.Head->DelayTicks > 0)
-            DelayList.Head->DelayTicks--;
-        while (DelayList.Head != NULL && DelayList.Head->DelayTicks == 0)
-        {
-            OS_TCB *tcb_to_wake = List_PopHead(&DelayList);
-            tcb_to_wake->State = TASK_READY;
-            OS_ReadyListAdd(tcb_to_wake);
-        }
+        OS_TCB *tcb_to_wake = List_PopHead(&DelayList);
+
+        tcb_to_wake->State = TASK_READY;
+        OS_ReadyListAdd(tcb_to_wake);
     }
 
     OS_List *ls = &ReadyList[CurrentTCB->Priority];
@@ -311,6 +354,13 @@ void OS_Tick_Handler(void)
     {
         OS_Schedule();
     }
+
+#if OS_BENCHMARK_ENABLE
+    if (benchmark_tick_active != FALSE)
+    {
+        Benchmark_RuntimeRecordKernelTick(DWT->CYCCNT - benchmark_tick_start);
+    }
+#endif
 }
 
 void OS_Delay(uint32_t ticks)
@@ -320,54 +370,7 @@ void OS_Delay(uint32_t ticks)
     CurrentTCB->State = TASK_BLOCKED;
     OS_ReadyListRemove(CurrentTCB);
 
-    if (DelayList.Head == NULL)
-    {
-        // 情况A: 列表为空，直接作为头�?
-        CurrentTCB->DelayTicks = ticks;
-        List_InsertTail(&DelayList, CurrentTCB);
-    }
-    else
-    {
-        OS_TCB *iter = DelayList.Head;
-
-        // 寻找插入位置：减去前面的时间，直到剩�?ticks 小于当前节点
-        while (iter != NULL && ticks >= iter->DelayTicks)
-        {
-            ticks -= iter->DelayTicks;
-            iter = iter->Next;
-        }
-
-        // 此时 ticks 为相对于前一个节点的剩余时间
-        CurrentTCB->DelayTicks = ticks;
-
-        if (iter == NULL)
-        {
-            // 情况B: 插入到链表尾�?(比列表中所有任务延时都�?
-            List_InsertTail(&DelayList, CurrentTCB);
-        }
-        else if (iter == DelayList.Head)
-        {
-            // 情况C: 插入到链表头�?(比当前头部还要快唤醒)
-            iter->DelayTicks -= ticks; // 修正原头部的相对时间
-
-            // 链表头插操作
-            CurrentTCB->Next = iter;
-            iter->Prev = CurrentTCB;
-            CurrentTCB->Prev = NULL;
-            DelayList.Head = CurrentTCB;
-        }
-        else
-        {
-            // 情况D: 插入到链表中�?
-            iter->DelayTicks -= ticks; // 修正后继节点的相对时�?
-
-            // 插入�?iter 之前
-            CurrentTCB->Next = iter;
-            CurrentTCB->Prev = iter->Prev;
-            iter->Prev->Next = CurrentTCB;
-            iter->Prev = CurrentTCB;
-        }
-    }
+    OS_DelayListInsert(&DelayList, CurrentTCB, ticks);
 
     NextTCB = FindNextTask();
 
@@ -406,7 +409,7 @@ OS_Status OS_SemWait(OS_Sem *p_sem)
     if (p_sem == NULL)
         return OS_ERR_PARAM;
     OS_EnterCritical();
-    if (p_sem->count > 0) // 原本就有信号�?
+    if (p_sem->count > 0) // 原本就有信号量
     {
         p_sem->count--;
         OS_ExitCritical();
@@ -418,7 +421,6 @@ OS_Status OS_SemWait(OS_Sem *p_sem)
     OS_ExitCritical();
 
     return OS_OK;
-    
 }
 
 OS_Status OS_SemPost(OS_Sem *p_sem)
@@ -444,7 +446,7 @@ OS_Status OS_SemPostFromISR(OS_Sem *p_sem, uint8_t *p_HigherPrioTaskWoken)
     if (p_sem == NULL)
         return OS_ERR_PARAM;
 
-    /* 初始化输出参�?*/
+    /* 初始化输出参数 */
     if (p_HigherPrioTaskWoken != NULL)
         *p_HigherPrioTaskWoken = FALSE;
 
@@ -455,7 +457,7 @@ OS_Status OS_SemPostFromISR(OS_Sem *p_sem, uint8_t *p_HigherPrioTaskWoken)
     }
     else
     {
-        /* 有任务在等待，唤醒第一�?*/
+        /* 有任务在等待，唤醒第一个 */
         OS_TCB *TaskToWake = OS_TaskResume(&p_sem->WaitList);
 
         /* 检查是否需要上下文切换 */
@@ -541,7 +543,7 @@ OS_Status OS_MutexPend(OS_Mutex *p_mutex)
                 }
                 CurrentTCB->Next = iter->Next;
                 CurrentTCB->Prev = iter;
-                if (iter->Next != NULL) // 如果 iter 不是最后一个节�?
+                if (iter->Next != NULL) // 如果 iter 不是最后一个节点
                 {
                     iter->Next->Prev = CurrentTCB; // 让后面的人指向我
                 }
@@ -580,7 +582,6 @@ OS_Status OS_MutexPost(OS_Mutex *p_mutex)
         return OS_OK;
     }
 
-
     if (CurrentTCB->Priority != CurrentTCB->OriginalPrio)
     {
         OS_ReadyListRemove(CurrentTCB);
@@ -602,7 +603,6 @@ OS_Status OS_MutexPost(OS_Mutex *p_mutex)
     OS_Schedule();
     OS_ExitCritical();
     return OS_OK;
-
 }
 
 void OS_QueueInit(OS_Queue *p_queue, void *buffer, uint16_t msg_size, uint16_t queue_size)
@@ -626,7 +626,7 @@ OS_Status OS_QueueSend(OS_Queue *p_queue, void *p_msg)
 
     OS_EnterCritical();
 
-    if (p_queue->MsgCount >= p_queue->QSize) // 队列�?
+    if (p_queue->MsgCount >= p_queue->QSize) // 队列满
     {
         OS_ExitCritical();
         return OS_ERR_Q_FULL;
@@ -635,12 +635,12 @@ OS_Status OS_QueueSend(OS_Queue *p_queue, void *p_msg)
     uint8_t *WriteAddr = (uint8_t *)p_queue->Buffer + ((p_queue->Head) * (p_queue->MsgSize));
     /* 拷贝 */
     memcpy(WriteAddr, p_msg, p_queue->MsgSize);
-    /* 处理写指�?Head = (Head + 1) % QSize 防止回绕 */
+    /* 处理写指针 Head = (Head + 1) % QSize 防止回绕 */
     p_queue->Head = (p_queue->Head + 1) % p_queue->QSize;
-    /* 消息�?+ 1 */
+    /* 消息数 + 1 */
     p_queue->MsgCount++;
 
-    if(p_queue->WaitReadList.Head != NULL)
+    if (p_queue->WaitReadList.Head != NULL)
         OS_TaskResumeAndSchedule(&p_queue->WaitReadList);
 
     OS_ExitCritical();
@@ -653,7 +653,7 @@ OS_Status OS_QueueSendFromISR(OS_Queue *p_queue, void *p_msg, uint8_t *p_HigherP
     if (p_queue == NULL || p_msg == NULL)
         return OS_ERR_PARAM;
 
-    /* 初始化输出参�?*/
+    /* 初始化输出参数 */
     if (p_HigherPrioTaskWoken != NULL)
         *p_HigherPrioTaskWoken = FALSE;
 
@@ -665,14 +665,14 @@ OS_Status OS_QueueSendFromISR(OS_Queue *p_queue, void *p_msg, uint8_t *p_HigherP
 
     /* 计算写入地址 */
     uint8_t *WriteAddr = (uint8_t *)p_queue->Buffer + ((p_queue->Head) * (p_queue->MsgSize));
-    
+
     /* 拷贝消息 */
     memcpy(WriteAddr, p_msg, p_queue->MsgSize);
-    
-    /* 更新写指针（环形缓冲�?*/
+
+    /* 更新写指针（环形缓冲区） */
     p_queue->Head = (p_queue->Head + 1) % p_queue->QSize;
-    
-    /* 消息�?+ 1 */
+
+    /* 消息数 + 1 */
     p_queue->MsgCount++;
 
     /* 如果有任务在等待读取，唤醒它 */
@@ -724,7 +724,7 @@ OS_Status OS_QueueReceiveFromISR(OS_Queue *p_queue, void *p_msg_buffer, uint8_t 
     if (p_queue == NULL || p_msg_buffer == NULL)
         return OS_ERR_PARAM;
 
-    /* 初始化输出参数（预留�?*/
+    /* 初始化输出参数（预留） */
     if (p_HigherPrioTaskWoken != NULL)
         *p_HigherPrioTaskWoken = FALSE;
 
@@ -736,14 +736,14 @@ OS_Status OS_QueueReceiveFromISR(OS_Queue *p_queue, void *p_msg_buffer, uint8_t 
 
     /* 计算读取地址 */
     uint8_t *ReadAddr = (uint8_t *)p_queue->Buffer + ((p_queue->Tail) * (p_queue->MsgSize));
-    
+
     /* 拷贝消息 */
     memcpy(p_msg_buffer, ReadAddr, p_queue->MsgSize);
-    
-    /* 更新读指针（环形缓冲�?*/
+
+    /* 更新读指针（环形缓冲区） */
     p_queue->Tail = (p_queue->Tail + 1) % p_queue->QSize;
-    
-    /* 消息�?- 1 */
+
+    /* 消息数 - 1 */
     p_queue->MsgCount--;
 
     return OS_OK;
@@ -751,12 +751,11 @@ OS_Status OS_QueueReceiveFromISR(OS_Queue *p_queue, void *p_msg_buffer, uint8_t 
 
 OS_Status OS_MemInit(OS_Mem *p_mem, void *start_addr, uint32_t block_num, uint32_t block_size)
 {
-    if(p_mem == NULL || start_addr == NULL || block_num == 0 || (block_size < OS_ALIGN_SIZE) || ((block_size & 0x03) != 0)) 
+    if (p_mem == NULL || start_addr == NULL || block_num == 0 || (block_size < OS_ALIGN_SIZE) || ((block_size & 0x03) != 0))
         return OS_ERR_PARAM;
 
     if (((uintptr_t)start_addr % OS_ALIGN_SIZE) != 0)
         return OS_ERR_NOT_ALIGN;
-
 
     p_mem->Addr = start_addr;
     p_mem->FreeList = start_addr;
@@ -766,8 +765,8 @@ OS_Status OS_MemInit(OS_Mem *p_mem, void *start_addr, uint32_t block_num, uint32
     List_Init(&p_mem->WaitList);
 
     void **pp_link;
-    uint8_t *p_block = (uint8_t *)start_addr; 
-    for(uint32_t i = 0; i < (block_num - 1); ++i)
+    uint8_t *p_block = (uint8_t *)start_addr;
+    for (uint32_t i = 0; i < (block_num - 1); ++i)
     {
         /* 取出当前块的起始地址 */
         pp_link = (void **)p_block;
@@ -782,7 +781,7 @@ OS_Status OS_MemInit(OS_Mem *p_mem, void *start_addr, uint32_t block_num, uint32
         p_block = p_next;
     }
 
-    /* 最后一个块�?NULL */
+    /* 最后一个块写 NULL */
     pp_link = (void **)p_block;
     *pp_link = NULL;
 
@@ -791,11 +790,12 @@ OS_Status OS_MemInit(OS_Mem *p_mem, void *start_addr, uint32_t block_num, uint32
 
 void *OS_MemGet(OS_Mem *p_mem)
 {
-    if(p_mem == NULL) return NULL;
+    if (p_mem == NULL)
+        return NULL;
 
     OS_EnterCritical();
 
-    while(p_mem->FreeBlocks == 0)
+    while (p_mem->FreeBlocks == 0)
     {
         OS_TaskSuspend(&p_mem->WaitList);
         OS_ExitCritical();
@@ -813,11 +813,12 @@ void *OS_MemGet(OS_Mem *p_mem)
 
 OS_Status OS_MemPut(OS_Mem *p_mem, void *p_block)
 {
-    if(p_mem == NULL || p_block == NULL) return OS_ERR_PARAM;
+    if (p_mem == NULL || p_block == NULL)
+        return OS_ERR_PARAM;
 
     OS_EnterCritical();
 
-    /* 安全检�?*/
+    /* 安全检查 */
     uint8_t *start_addr = (uint8_t *)p_mem->Addr;
     uint8_t *block_addr = (uint8_t *)p_block;
     uint32_t total_size = p_mem->TotalBlocks * p_mem->BlockSize;
@@ -828,7 +829,7 @@ OS_Status OS_MemPut(OS_Mem *p_mem, void *p_block)
         return OS_ERR_INVALID_ADDR;
     }
 
-    if(((uint32_t)(block_addr - start_addr) % p_mem->BlockSize) != 0)
+    if (((uint32_t)(block_addr - start_addr) % p_mem->BlockSize) != 0)
     {
         OS_ExitCritical();
         return OS_ERR_NOT_ALIGN;
@@ -836,7 +837,7 @@ OS_Status OS_MemPut(OS_Mem *p_mem, void *p_block)
 
     // 将当前的 FreeList (旧链表头) 存入要释放的块中
     *(void **)p_block = p_mem->FreeList;
-    // 更新 FreeList 指向当前�?(新链表头)
+    // 更新 FreeList 指向当前块(新链表头)
     p_mem->FreeList = p_block;
     p_mem->FreeBlocks++;
 
