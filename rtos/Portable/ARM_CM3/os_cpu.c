@@ -56,7 +56,7 @@ uint32_t *OS_StackInit(void *task_function, void *task_param, uint32_t *stack_in
 
 void OS_Init_Timer(uint32_t ms)
 {
-    uint32_t ticks = 72000000 * ms / 1000;
+    uint32_t ticks = (OS_CPU_CLOCK_HZ / 1000U) * ms;
 
     if (SysTick_Config(ticks))
     {

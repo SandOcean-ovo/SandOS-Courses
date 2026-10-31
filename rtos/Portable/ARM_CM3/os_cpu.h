@@ -19,7 +19,7 @@
 #define __OS_CPU_H
 
 #include "os_common.h"
-#include "stm32f1xx.h"
+#include "os_board.h"   /* 板级头文件：提供 CMSIS Core、IRQn_Type、OS_CPU_CLOCK_HZ */
 
 /* 函数声明 ---------------------------------------------------------------- */
 
