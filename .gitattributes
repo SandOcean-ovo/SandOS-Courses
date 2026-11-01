@@ -1,0 +1,5 @@
+# 脚本和构建文件必须用 LF，否则 Windows 上 autocrlf 会让 bash 脚本因 \r 无法运行
+*.sh      text eol=lf
+*.py      text eol=lf
+Makefile  text eol=lf
+*.ld      text eol=lf

@@ -56,6 +56,10 @@ uint32_t *OS_StackInit(void *task_function, void *task_param, uint32_t *stack_in
 
 void OS_Init_Timer(uint32_t ms)
 {
+    /* 重载值 = 每毫秒的时钟周期数 * 毫秒数。
+     * 时钟频率由板级头文件 os_board.h 的 OS_CPU_CLOCK_HZ 提供，
+     * 不再写死 72 MHz（QEMU mps2-an385 为 25 MHz，STM32F103 常用 72 MHz）。
+     * 先除后乘避免 clock*ms 在 32 位下溢出；时钟需为 1000 的整数倍，否则有舍入误差。 */
     uint32_t ticks = (OS_CPU_CLOCK_HZ / 1000U) * ms;
 
     if (SysTick_Config(ticks))
