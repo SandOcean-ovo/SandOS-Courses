@@ -9,7 +9,7 @@
  *   3. OS_Delay 让出 CPU 后，SysTick 能在延时到期时把任务重新唤醒并切换。
  *
  * 判定规则（由 tests/scripts/run_qemu.py 执行）：
- *   - 串口输出出现 "TEST:PASS" 才算通过；
+ *   - 输出完整 CASE/TEST:PASS 行，并通过 semihosting 自然退出 0；
  *   - A0、B0、A2 必须按此顺序出现。
  *   两个任务优先级相同，同一个 tick 被唤醒时谁先打印不固定，
  *   所以只断言每个任务自己的先后顺序，不断言 A 与 B 的交错顺序。
@@ -19,6 +19,7 @@
  */
 #include "os_core.h"
 #include "uart.h"
+#include "test_support.h"
 #include <stdio.h>
 
 /** 每个任务的栈深度（单位：uint32_t 个数，即 1 KB） */
@@ -37,7 +38,7 @@ static uint32_t stack_b[TASK_STACK_WORDS];       /**< 任务 B 的栈 */
 /**
  * @brief  任务 A：循环打印 "A<i>"，打印完成后输出 TEST:PASS
  * @param  p 任务参数（未使用）
- * @note   完成后进入长延时循环，不让任务函数返回（返回会进入 OS_TaskReturn 死循环）。
+ * @note   完成后输出结果并通过 semihosting 退出 QEMU，不让任务函数返回。
  */
 static void task_a(void *p)
 {
@@ -47,9 +48,7 @@ static void task_a(void *p)
         printf("A%d\n", i);
         OS_Delay(LOOP_DELAY_TICKS);
     }
-    printf("TEST:PASS\n");
-    for (;;)
-        OS_Delay(100);
+    test_finish();
 }
 
 /**
@@ -74,7 +73,7 @@ static void task_b(void *p)
  */
 int main(void)
 {
-    uart_init();
+    test_begin("SMOKE-01");
     printf("SandOS qemu-mps2 boot\n");
 
     OS_Init();      /* 初始化内核数据结构并创建空闲任务，必须先于 OS_TaskCreate */

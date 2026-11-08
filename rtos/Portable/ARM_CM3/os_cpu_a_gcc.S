@@ -84,6 +84,7 @@ PendSV_Handler:
     stmdb   r0!, {r4-r11}       /* 把 R4-R11 压到任务栈，R0 随之下移 32 字节 */
     str     r0, [r1]            /* 保存新的栈指针：TCB->stackPtr = R0 */
 
+PendSV_Saved:                  /* 调试锚点：旧任务的 16 字上下文已经保存 */
 RestoreContext:
     ldr     r2, =NextTCB        /* R2 = &NextTCB */
     ldr     r3, =CurrentTCB     /* R3 = &CurrentTCB */
@@ -95,6 +96,11 @@ RestoreContext:
 
     orr     lr, lr, #0x04       /* EXC_RETURN 的 bit2 置 1：返回线程模式并使用 PSP */
     cpsie   i                   /* 开中断 */
+
+    /* 调试锚点：此标签不产生任何指令，只用于让 GDB 能在“PSP 已切换、尚未异常返回”
+     * 的位置下断点（break PendSV_Exit）。此时 CurrentTCB 已是新任务，R4-R11 已恢复，
+     * PSP 指向新任务硬件栈帧的起点，tests/gdb/pendsv_frame.gdb 依赖它做栈帧检查。 */
+PendSV_Exit:
     bx      lr                  /* 异常返回：硬件弹栈，跳到新任务的 PC */
 
     .pool                       /* 放置上面 ldr =符号 用到的字面量池 */

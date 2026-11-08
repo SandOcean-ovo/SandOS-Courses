@@ -1,0 +1,6 @@
+# Keil 自动生成的会话、设备缓存和中间输出；源码工程与 uvoptx 仍需纳入版本。
+DebugConfig/
+RTE/
+RAM/
+EventRecorderStub.scvd
+*.uvguix.*

@@ -53,6 +53,7 @@ typedef enum {
     OS_ERR_PARAM      = 1,  ///< 参数错误（例如传入了 NULL 指针）
     OS_ERR_TIMEOUT    = 2,  ///< 等待超时（预留）
     OS_ERR_RESOURCE   = 3,  ///< 资源不可用（例如 TryLock 失败）
+    OS_ERR_OVERFLOW   = 4,  ///< 计数达到容量上限，操作未改变资源计数
     
     // 互斥锁特有的错误
     OS_ERR_NOT_OWNER  = 10, ///< 错误：试图释放一个不属于自己的锁
@@ -235,7 +236,8 @@ OS_Status OS_TaskCreate(OS_TCB *tcb,
 
 /**
  * @brief  任务阻塞延时
- * @details 调用此函数的任务将进入阻塞状态，让出 CPU 使用权。
+ * @details ticks > 0 时进入阻塞状态。ticks == 0 时保持就绪，移到本优先级队尾；
+ *          无同优先级就绪伙伴时继续运行，不进入延时队列。
  * @param  ticks 延时的时间长度（单位：SysTick 节拍数，通常为 ms）
  */
 void OS_Delay(uint32_t ticks);
@@ -286,36 +288,37 @@ void OS_ExitCritical(void);
  */
 
 /**
- * @brief  初始化信号量
- * @param  p_sem 指向信号量对象的指针
- * @return OS_Status
+ * @brief 初始化未发布且没有等待者的信号量，仅在线程/初始化上下文调用。
+ * @param p_sem 指向静态分配且无并发访问的信号量对象。
+ * @param init_count 初始许可次数，0～UINT16_MAX；不是时间参数。
+ * @return 成功 OS_OK；p_sem 为 NULL 时 OS_ERR_PARAM。
+ * @note 覆盖旧计数并清空等待表。不支持使用中的对象重新初始化。
  */
-OS_Status OS_SemInit(OS_Sem *p_sem);
+OS_Status OS_SemInit(OS_Sem *p_sem, uint16_t init_count);
 
 /**
- * @brief  等待信号量 (P操作)
- * @details 如果信号量计数 > 0，则消耗一个计数并返回；否则任务阻塞。
- * @param  p_sem 指向信号量对象的指针
- * @return OS_Status 总是返回 OS_OK
+ * @brief 等待并消费一次许可，计数为 0 时无限阻塞。
+ * @param p_sem 已初始化的信号量，在线程中调用。
+ * @return 成功 OS_OK；空指针 OS_ERR_PARAM。
+ * @note 无有限超时；ISR/外层临界区误用的入口拒绝仍待后续实现。
  */
 OS_Status OS_SemWait(OS_Sem *p_sem);
 
 /**
- * @brief  发送信号量 (V操作)
- * @details 增加信号量计数。如果有任务在等待，则唤醒最高优先级的等待任务。
- * @param  p_sem 指向信号量对象的指针
- * @return OS_Status 总是返回 OS_OK
+ * @brief 在线程中释放一次许可；有等待者时按 FIFO 直接交接，计数不增加。
+ * @param p_sem 已初始化的信号量。
+ * @return OS_OK；空指针 OS_ERR_PARAM；无等待者且计数为 UINT16_MAX 时 OS_ERR_OVERFLOW。
+ * @note 溢出失败保持计数与等待队列不变，计数不回绕。
  */
 OS_Status OS_SemPost(OS_Sem *p_sem);
 
 /**
- * @brief  在中断中发送信号量 (V操作)
- * @details 中断安全版本，不会阻塞。
- * @param  p_sem          指向信号量对象的指针
- * @param  p_HigherPrioTaskWoken 输出参数，如果唤醒了更高优先级任务则置为 TRUE
- * @return OS_Status
- * @retval OS_OK         成功
- * @retval OS_ERR_PARAM  参数无效
+ * @brief 在 ISR 中释放许可，不阻塞；计数上限与任务版相同。
+ * @param p_sem 已初始化的信号量。
+ * @param p_HigherPrioTaskWoken 可选输出；成功唤醒更高优先级任务时为 TRUE。
+ * @return OS_OK、OS_ERR_PARAM 或 OS_ERR_OVERFLOW。
+ * @note 失败不修改计数、队列或输出标记。成功标记累积、共享状态保护与
+ *       ISR 尾部调度尚待专项修复，不能据计数测试宣称完整中断安全。
  */
 OS_Status OS_SemPostFromISR(OS_Sem *p_sem, uint8_t *p_HigherPrioTaskWoken);
 

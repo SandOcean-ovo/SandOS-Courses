@@ -1,133 +1,101 @@
 #!/usr/bin/env python3
-"""
-@file    run_qemu.py
-@brief   在 QEMU mps2-an385 上运行一个 ELF，按串口输出判定测试结果
+"""运行 mps2-an385 ELF：完整 PASS 行、预期输出和 QEMU 正常退出三者缺一不可。
 
-用法:
-    python tests/scripts/run_qemu.py <elf> [--timeout 秒] [--expect 文本 ...] [--log 路径]
-
-判定规则（全部满足才算通过，退出码 0）:
-    1. 串口输出出现 "TEST:PASS"；
-    2. 所有 --expect 给出的文本按顺序出现（只断言偏序，不要求相邻）；
-    3. 没有出现 "TEST:FAIL"、"TEST:FAULT"、"OS ASSERT FAILED"，
-       包括 "TEST:PASS" 之后的一小段观察期（GRACE）内。
-
-退出码约定（run_all.sh 的负例依赖这些数值）:
-    0  通过
-    1  失败（出现失败/故障标记、QEMU 提前退出、缺少期望文本）
-    2  超时（没有在限定时间内出现 TEST:PASS，包括完全没有输出）
-    3  QEMU 无法启动（例如 qemu-system-arm 不在 PATH 中）
-
-关键原则：超时、无输出、异常退出都不会被当作通过。
+退出码：0 通过；1 标记/输出/退出状态不符；2 超时；3 无法启动 QEMU。
+PASS 后不退出也会超时；不再使用固定观察期推定完成。
 """
 import argparse
+from pathlib import Path
 import subprocess
 import sys
 import threading
 import time
 
-## QEMU 可执行文件名，需在 PATH 中
 QEMU = "qemu-system-arm"
-
-## 看到 TEST:PASS 后继续观察的秒数。
-# 用来发现“先打印 PASS、随后才崩溃”这类假通过。
-GRACE = 0.5
-
-## 任何一个出现就判失败的标记
 BAD = ("TEST:FAIL", "TEST:FAULT", "OS ASSERT FAILED")
 
 
 def main():
-    """
-    @brief  脚本入口：启动 QEMU、收集串口输出、给出判定
-    @return 进程退出码，含义见文件头部说明
-    """
     ap = argparse.ArgumentParser()
-    ap.add_argument("elf", help="要运行的 ELF 文件")
-    ap.add_argument("--timeout", type=float, default=10.0,
-                    help="最长等待秒数（默认 10）")
-    ap.add_argument("--expect", action="append", default=[],
-                    help="必须按顺序出现的输出文本，可重复给出")
-    ap.add_argument("--log", help="把完整串口输出另存到该文件")
+    ap.add_argument("elf")
+    ap.add_argument("--timeout", type=float, default=10.0)
+    ap.add_argument("--expect", action="append", default=[])
+    ap.add_argument("--case", help="要求出现完整 CASE 编号行")
+    ap.add_argument("--log", help="另存 QEMU 原始输出")
     a = ap.parse_args()
-
-    # -serial stdio：把 UART0 接到本进程的管道；-monitor none 关闭 QEMU 控制台
     cmd = [QEMU, "-M", "mps2-an385", "-cpu", "cortex-m3", "-nographic",
-           "-monitor", "none", "-serial", "stdio", "-kernel", a.elf]
+           "-monitor", "none", "-serial", "stdio",
+           "-semihosting-config", "enable=on,target=native", "-kernel", a.elf]
     try:
-        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE,
-                                stderr=subprocess.STDOUT)
-    except OSError as e:
-        print(f"RESULT: ERROR cannot start qemu: {e}")
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    except OSError as error:
+        print(f"RESULT: ERROR cannot start qemu: {error}")
         return 3
 
-    # 用后台线程持续读取输出，避免主线程阻塞在 read 上导致无法超时
     buf = bytearray()
     lock = threading.Lock()
 
     def reader():
-        """@brief 读线程：把 QEMU 的输出不断追加到 buf"""
         for chunk in iter(lambda: proc.stdout.read1(4096), b""):
             with lock:
                 buf.extend(chunk)
 
-    t = threading.Thread(target=reader, daemon=True)
-    t.start()
-
-    def text():
-        """@brief 取当前已收到的全部输出（解码失败的字节用替换字符）"""
+    def output():
         with lock:
             return buf.decode("utf-8", "replace")
 
-    # 轮询：先查失败标记，再查通过标记，最后查 QEMU 是否提前退出
+    thread = threading.Thread(target=reader, daemon=True)
+    thread.start()
     deadline = time.monotonic() + a.timeout
-    verdict = None          # None 表示到时间仍没有结论
-    while time.monotonic() < deadline:
-        out = text()
-        bad = next((b for b in BAD if b in out), None)
-        if bad:
-            verdict = ("FAIL", f"saw {bad}")
-            break
-        if "TEST:PASS" in out:
-            # 观察期：PASS 之后立刻出现的故障/断言也要能发现
-            time.sleep(GRACE)
-            out = text()
-            bad = next((b for b in BAD if b in out), None)
-            verdict = (("FAIL", f"saw {bad} after TEST:PASS") if bad
-                       else ("PASS", ""))
-            break
-        if proc.poll() is not None:
-            verdict = ("FAIL", f"qemu exited early (code {proc.returncode}) "
-                               "without TEST:PASS")
-            break
-        time.sleep(0.05)
+    timed_out = False
+    bad = None
+    try:
+        while proc.poll() is None:
+            bad = next((marker for marker in BAD if marker in output()), None)
+            if bad:
+                break
+            if time.monotonic() >= deadline:
+                timed_out = True
+                break
+            time.sleep(0.01)
+    finally:
+        # 只有目标自然退出才可能通过；脚本主动 kill 绝不能产生通过结果。
+        native_exit = proc.poll()
+        if native_exit is None:
+            proc.kill()
+        proc.wait()
+        thread.join()
+        proc.stdout.close()
 
-    # 无论结果如何，都结束 QEMU 并取完输出
-    proc.kill()
-    proc.wait()
-    t.join(timeout=1)
-    out = text()
+    out = output()
     if a.log:
-        with open(a.log, "w", encoding="utf-8") as f:
-            f.write(out)
-    sys.stdout.write(out if out.endswith("\n") or not out else out + "\n")
-
-    if verdict is None:
-        print(f"RESULT: TIMEOUT after {a.timeout}s (output bytes: {len(out)})")
+        Path(a.log).write_text(out, encoding="utf-8")
+    print(out, end="" if out.endswith("\n") or not out else "\n")
+    bad = next((marker for marker in BAD if marker in out), bad)
+    if bad:
+        print(f"RESULT: FAIL saw {bad} (qemu exit={native_exit})")
+        return 1
+    if timed_out:
+        print(f"RESULT: TIMEOUT after {a.timeout}s; target did not exit (output bytes={len(out)})")
         return 2
-    if verdict[0] == "PASS":
-        # 期望文本必须按给定顺序出现；pos 记录上一个匹配的结束位置
-        pos = 0
-        for e in a.expect:
-            i = out.find(e, pos)
-            if i < 0:
-                print(f"RESULT: FAIL missing/out-of-order expected text: {e!r}")
-                return 1
-            pos = i + len(e)
-        print("RESULT: PASS")
-        return 0
-    print(f"RESULT: {verdict[0]} {verdict[1]}")
-    return 1
+    if native_exit != 0:
+        print(f"RESULT: FAIL qemu exit={native_exit}, expected 0")
+        return 1
+    if "TEST:PASS" not in out.splitlines():
+        print("RESULT: FAIL missing complete TEST:PASS line")
+        return 1
+    if a.case and f"CASE {a.case}" not in out.splitlines():
+        print(f"RESULT: FAIL missing CASE {a.case}")
+        return 1
+    position = 0
+    for expected in a.expect:
+        found = out.find(expected, position)
+        if found < 0:
+            print(f"RESULT: FAIL missing/out-of-order expected text: {expected!r}")
+            return 1
+        position = found + len(expected)
+    print("RESULT: PASS qemu exit=0")
+    return 0
 
 
 if __name__ == "__main__":

@@ -15,6 +15,7 @@
  */
 #include <stdint.h>
 #include "uart.h"
+#include "test_support.h"
 
 /* ---- 链接脚本（link.ld）导出的符号，只取地址，不读取其值 ---- */
 extern uint32_t _estack;   /**< RAM 顶端，作为初始 MSP */
@@ -33,6 +34,8 @@ void Reset_Handler(void);
 void Default_Handler(void);
 void HardFault_Handler(void);
 void SysTick_Handler(void);
+/** @brief 默认 SVCall 报告未使用异常；目标测试可用强符号覆盖，内核调度不使用 SVC。 */
+void SVC_Handler(void) __attribute__((weak, alias("Default_Handler")));
 
 /**
  * @brief 中断向量表
@@ -50,7 +53,7 @@ void (*const g_vectors[])(void) = {
     Default_Handler,            /*  5: BusFault */
     Default_Handler,            /*  6: UsageFault */
     0, 0, 0, 0,                 /*  7-10: 保留 */
-    Default_Handler,            /* 11: SVCall（M1 不使用） */
+    SVC_Handler,                /* 11: SVCall，允许测试覆盖默认故障入口 */
     Default_Handler,            /* 12: DebugMonitor */
     0,                          /* 13: 保留 */
     PendSV_Handler,             /* 14: PendSV —— 任务切换 */
@@ -120,8 +123,7 @@ __attribute__((used)) void Fault_Report(uint32_t *frame, const char *name)
     uart_puts(" xPSR=");
     put_hex(frame[7]);
     uart_puts("\r\nTEST:FAULT\r\n");
-    for (;;)
-        ;
+    test_exit(1);
 }
 
 /**
@@ -156,6 +158,5 @@ __attribute__((naked)) void HardFault_Handler(void)
 void Default_Handler(void)
 {
     uart_puts("\r\nFAULT: unexpected exception\r\nTEST:FAULT\r\n");
-    for (;;)
-        ;
+    test_exit(1);
 }

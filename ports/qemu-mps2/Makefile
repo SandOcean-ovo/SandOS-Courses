@@ -33,7 +33,7 @@ SRCS := $(filter-out main.c,$(wildcard *.c)) $(APP) \
         $(ROOT)/rtos/Portable/ARM_CM3/os_cpu_a_gcc.S
 
 # 头文件搜索路径：本目录的 os_board.h、内核头文件、移植层头文件、CMSIS Core
-INCS := -I. \
+INCS := -I. -I$(ROOT)/tests/target \
         -I$(ROOT)/rtos/Inc \
         -I$(ROOT)/rtos/Portable \
         -I$(ROOT)/rtos/Portable/ARM_CM3 \
@@ -42,7 +42,7 @@ INCS := -I. \
 # 编译选项：Cortex-M3 Thumb 指令；-Os 优化大小；-g3 保留完整调试信息（GDB 用）；
 # -ffunction-sections/-fdata-sections 配合链接时 --gc-sections 去掉未用代码
 CFLAGS  := -mcpu=cortex-m3 -mthumb -Os -g3 -Wall -Wextra \
-           -ffunction-sections -fdata-sections \
+           -ffunction-sections -fdata-sections -MMD -MP \
            -DOS_BENCHMARK_ENABLE=0 $(INCS)
 
 # 链接选项：使用本目录链接脚本；nano.specs 使用体积更小的 newlib-nano；
@@ -82,3 +82,5 @@ clean:
 	rm -rf $(BUILD)
 
 .PHONY: all clean
+
+-include $(OBJS:.o=.d)

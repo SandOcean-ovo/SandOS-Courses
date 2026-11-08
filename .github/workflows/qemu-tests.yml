@@ -1,0 +1,54 @@
+name: SandOS QEMU and host tests
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  regression:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      GDB: gdb-multiarch
+      PYTHON: python3
+      PYTHONUNBUFFERED: "1"
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Install GCC, QEMU and GDB
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends build-essential python3 gcc-arm-none-eabi libnewlib-arm-none-eabi qemu-system-arm gdb-multiarch
+      - name: Record environment
+        run: |
+          mkdir -p tests/build/logs
+          {
+            git rev-parse HEAD
+            uname -a
+            arm-none-eabi-gcc --version
+            gcc --version
+            qemu-system-arm --version
+            gdb-multiarch --version
+            make --version
+            python3 --version
+          } > tests/build/logs/ENV.log
+      - name: Run regression
+        run: |
+          set -o pipefail
+          bash tests/scripts/run_all.sh | tee tests/build/logs/suite.log
+      - name: Preserve build and test logs
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: regression-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            tests/build/logs/
+            ports/qemu-mps2/build/*.elf
+            ports/qemu-mps2/build/*.map
+          retention-days: 14
+          if-no-files-found: warn

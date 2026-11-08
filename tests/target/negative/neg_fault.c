@@ -11,11 +11,12 @@
  * 会升级为 HardFault。
  */
 #include "uart.h"
+#include "test_support.h"
 
 /** @brief 入口：先输出一行，再执行 udf 指令触发故障 */
 int main(void)
 {
-    uart_init();
+    test_begin("NEG-03");
     uart_puts("about to fault\r\n");
 
     __asm volatile("udf #0");       /* 永久未定义的指令 */

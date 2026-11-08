@@ -367,6 +367,22 @@ void OS_Delay(uint32_t ticks)
 {
     OS_EnterCritical();
 
+    if (ticks == 0U)
+    {
+        /* 零延时只轮转本优先级的就绪队列，不等待未来的 tick 来解除阻塞。 */
+        OS_List *ready = &ReadyList[CurrentTCB->Priority];
+        if (ready->Head != ready->Tail)
+        {
+            List_Remove(ready, CurrentTCB);
+            List_InsertTail(ready, CurrentTCB);
+        }
+        NextTCB = FindNextTask();
+        if (NextTCB != CurrentTCB)
+            OS_Schedule();
+        OS_ExitCritical();
+        return;
+    }
+
     CurrentTCB->State = TASK_BLOCKED;
     OS_ReadyListRemove(CurrentTCB);
 
@@ -396,10 +412,18 @@ void OS_ExitCritical(void)
     }
 }
 
-OS_Status OS_SemInit(OS_Sem *p_sem)
+/**
+ * @brief 初始化尚未发布的信号量；不支持对仍有等待者的对象重新初始化。
+ * @param p_sem 静态分配的信号量对象。
+ * @param init_count 初始可消费次数，包含 0 和 UINT16_MAX。
+ * @return OS_OK；p_sem 为 NULL 时 OS_ERR_PARAM。
+ * @note 在线程/初始化上下文、没有并发访问时调用；必须覆盖旧内存中的计数。
+ */
+OS_Status OS_SemInit(OS_Sem *p_sem, uint16_t init_count)
 {
     if (p_sem == NULL)
         return OS_ERR_PARAM;
+    p_sem->count = init_count;
     List_Init(&p_sem->WaitList);
     return OS_OK;
 }
@@ -423,6 +447,12 @@ OS_Status OS_SemWait(OS_Sem *p_sem)
     return OS_OK;
 }
 
+/**
+ * @brief 在线程中释放一次许可；等待者 FIFO 交接与计数累积互斥。
+ * @param p_sem 已初始化且仍有效的信号量。
+ * @return OS_OK；空指针 OS_ERR_PARAM；无等待者且计数已满 OS_ERR_OVERFLOW。
+ * @note 满计数检查和加一在同一临界区内；失败不改动计数或队列。
+ */
 OS_Status OS_SemPost(OS_Sem *p_sem)
 {
     if (p_sem == NULL)
@@ -430,6 +460,11 @@ OS_Status OS_SemPost(OS_Sem *p_sem)
     OS_EnterCritical();
     if (p_sem->WaitList.Head == NULL)
     {
+        if (p_sem->count == UINT16_MAX)
+        {
+            OS_ExitCritical();
+            return OS_ERR_OVERFLOW;
+        }
         p_sem->count++;
     }
     else
@@ -441,12 +476,24 @@ OS_Status OS_SemPost(OS_Sem *p_sem)
     return OS_OK;
 }
 
+/**
+ * @brief ISR 释放许可的计数边界处理；完整保护/调度路径仍按 ISR 专项验证。
+ * @param p_sem 已初始化的信号量。
+ * @param p_HigherPrioTaskWoken 可选唤醒输出；参数错误或计数溢出不修改它。
+ * @return OS_OK、OS_ERR_PARAM 或 OS_ERR_OVERFLOW。
+ * @note 先拒绝无等待者时的溢出，避免 uint16_t 回绕；本轮不改变成功唤醒路径。
+ */
 OS_Status OS_SemPostFromISR(OS_Sem *p_sem, uint8_t *p_HigherPrioTaskWoken)
 {
     if (p_sem == NULL)
         return OS_ERR_PARAM;
 
-    /* 初始化输出参数 */
+    /* 溢出也属于失败：在写输出标记前拒绝，保留调用者原值。
+     * 此处尚未加入独立 ISR 保存/恢复保护；并发完整性属于后续专项。 */
+    if (p_sem->WaitList.Head == NULL && p_sem->count == UINT16_MAX)
+        return OS_ERR_OVERFLOW;
+
+    /* 成功路径沿用已有输出行为，累积唤醒标记的修复另项处理。 */
     if (p_HigherPrioTaskWoken != NULL)
         *p_HigherPrioTaskWoken = FALSE;
 
