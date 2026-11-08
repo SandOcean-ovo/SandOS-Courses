@@ -111,6 +111,7 @@ gdbcase GDBNEG-01 tests/gdb/negative/neg_corrupt_frame.gdb     1       # 栈帧�
 gdbcase GDBNEG-02 tests/gdb/negative/neg_never_hit.gdb         2 ../../tests/target/negative/neg_hang.c
 gdbcase GDBNEG-03 tests/gdb/negative/neg_no_check.gdb          1       # 没有任何检查输出 -> 失败
 gdbcase GDBNEG-04 tests/gdb/negative/neg_error_after_pass.gdb  1       # PASS 后命令出错 -> 失败
+gdbcase GDBNEG-05 tests/gdb/negative/neg_exit_without_teardown.gdb 1    # 提前退出无清理握手 -> 失败
 
 if "$PYTHON" tests/scripts/run_host.py >"$LOG_DIR/HOST.log" 2>&1; then
     echo "PASS  HOST (27 checks and 2 negative cases)"

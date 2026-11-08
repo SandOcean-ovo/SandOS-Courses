@@ -16,7 +16,8 @@
     - 出现 "GDBRESULT PASS"；
     - 没有任何 "GDBCHK ... FAIL"；
     - 至少出现一条 "GDBCHK"（防止脚本没跑到检查点就“空通过”）。
-    - GDB 正常退出，QEMU 在清理前仍存活，且没有 GDBRESULT FAIL。
+    - GDB 正常退出并在主动 kill 后输出清理完成标记；QEMU 可仍存活或正常退出 0。
+  非零退出、缺少清理握手或 GDBRESULT FAIL 仍判失败。
 
 退出码:
     0  通过
@@ -104,9 +105,12 @@ def main():
 
     checks = [l for l in lines if re.fullmatch(r"GDBCHK \S+ (?:PASS|FAIL)(?: .*)?", l)]
     failed = [l for l in checks if " FAIL" in l]
-    if gdb.returncode != 0 or qemu_exit is not None:
+    # GDB 的远程 kill 在 Linux 上可让 QEMU 退出 0，在 Windows 上可能仍存活。
+    # 只有脚本确认 kill 完成后，才接受这两种状态；不能接受提前正常退出。
+    teardown_done = "GDBTEARDOWN DONE" in lines
+    if gdb.returncode != 0 or qemu_exit not in (None, 0) or not teardown_done:
         print(out)
-        print(f"RESULT: FAIL process exit gdb={gdb.returncode} qemu={qemu_exit}")
+        print(f"RESULT: FAIL process exit gdb={gdb.returncode} qemu={qemu_exit} teardown={teardown_done}")
         return 1
     if not checks:
         print(out)

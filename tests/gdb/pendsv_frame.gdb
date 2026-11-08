@@ -33,5 +33,8 @@ if $fails == 0
 else
   printf "GDBRESULT FAIL fails=%d\n", $fails
 end
+# kill 在 Linux 上可让 QEMU 正常退出；标记只在该命令成功后输出。
+printf "GDBTEARDOWN BEGIN\n"
 kill
+printf "GDBTEARDOWN DONE\n"
 quit
