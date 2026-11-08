@@ -24,6 +24,7 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 $taskOldPath = $env:PATH
+$taskOldTools = $env:SANDOS_TEST_TOOL_PATH
 $taskExit = 1
 Push-Location (Join-Path $PSScriptRoot '../..')
 try {
@@ -39,10 +40,15 @@ try {
     # 主机测试所需的 UCRT64 DLL 必须与其 gcc 一同优先进入 PATH。
     $env:PATH = "$QemuBin;$MakeBin;$GnuBin;$taskOldPath"
     Get-Command python -ErrorAction Stop | Out-Null
-    & $BashPath tests/scripts/run_all.sh
+    # Git 的 Bash 启动器会再次把自己的 mingw64/bin 放在 PATH 前面。
+    # 必须在 Bash 内恢复 UCRT64 优先级，否则新编译 cc1 的 DLL 搜索可能失败。
+    # 工具路径通过环境变量传递，不把用户路径拼接为可执行 shell 代码。
+    $env:SANDOS_TEST_TOOL_PATH = "$QemuBin;$MakeBin;$GnuBin"
+    & $BashPath -c 'export PATH="$(cygpath -u -p "$SANDOS_TEST_TOOL_PATH"):$PATH"; source "$0"' tests/scripts/run_all.sh
     $taskExit = $LASTEXITCODE
 } finally {
     $env:PATH = $taskOldPath
+    $env:SANDOS_TEST_TOOL_PATH = $taskOldTools
     Pop-Location
 }
 exit $taskExit

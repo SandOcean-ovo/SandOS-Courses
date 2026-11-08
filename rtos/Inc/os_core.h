@@ -101,6 +101,7 @@ typedef struct Task_Control_Block
     volatile uint32_t DelayTicks;    ///< 延时的时间（单位ms）
     volatile uint8_t Priority;       ///< 任务优先级
     uint8_t OriginalPrio;            ///< 任务原始优先级
+    struct Mutex *HeldMutex;        ///< M1 单锁所有权；NULL 表示未持锁，同锁递归不增加对象数量
 } OS_TCB;
 
 
@@ -141,7 +142,7 @@ typedef struct Mutex
 {
     OS_TCB* Owner;        ///< 互斥锁的主人
     OS_List WaitList;     ///< 正在等待此互斥锁的等待链表
-    uint8_t NestCount;    ///< 嵌套调用计数
+    uint8_t NestCount;    ///< 包含首次持有的递归深度；1～255，0 表示未持有
     uint8_t OriginalPrio; ///< 原始优先级 
 } OS_Mutex;
 
@@ -338,7 +339,10 @@ OS_Status OS_MutexInit(OS_Mutex *p_mutex);
 
 /**
  * @brief  申请互斥锁 (Lock)
- * @details 支持递归上锁。支持优先级继承机制以防止优先级翻转。
+ * @details 同锁递归与单锁直接优先级继承，不承诺多锁或传递继承。
+ * @retval OS_ERR_NESTING 已持有同锁 255 层，状态不变。
+ * @retval OS_ERR_RESOURCE 已持有另一把不同锁，立即拒绝且状态不变。
+ * @note 线程上下文调用；不允许用户外层临界区。上下文拒绝专项仍待实现。
  * @param  p_mutex 指向互斥锁对象的指针
  * @return OS_Status
  */

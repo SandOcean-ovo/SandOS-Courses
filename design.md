@@ -128,7 +128,7 @@ RISC-V 通常需要软件全手动保存上下文（除非硬件扩展支持）�
 
 ## 3. 互斥锁与优先级继承
 
-为了解决实时系统中的**优先级翻转** 问题，SandOS 的互斥锁 (`OS_Mutex`) 实现了**优先级继承**。
+课程 M1 的互斥锁只支持单锁直接优先级继承，不承诺多锁或传递继承。每个任务用 `HeldMutex` 记录至多一把不同锁；同锁可递归 1～255 层，超过返回 `OS_ERR_NESTING`。申请第二把不同锁立即返回 `OS_ERR_RESOURCE`，不进入等待、不继承。最终释放清除旧持锁记录，交接时同时设置新所有权与 `TASK_READY`。
 
 ### 问题场景
 1.  **低优先级任务 (L)** 持有锁 M。
@@ -148,11 +148,18 @@ RISC-V 通常需要软件全手动保存上下文（除非硬件扩展支持）�
 ```c
 if (CurrentTCB->Priority < p_mutex->Owner->Priority)
 {
-    // 提升持有者优先级
-    p_mutex->Owner->Priority = CurrentTCB->Priority;
-    // 重新调整持有者在就绪表中的位置
-    OS_ReadyListRemove(p_mutex->Owner);
-    OS_ReadyListAdd(p_mutex->Owner);
+    if (p_mutex->Owner->State == TASK_READY)
+    {
+        // 按旧优先级摘除节点，再修改键并放入新的就绪队列。
+        OS_ReadyListRemove(p_mutex->Owner);
+        p_mutex->Owner->Priority = CurrentTCB->Priority;
+        OS_ReadyListAdd(p_mutex->Owner);
+    }
+    else
+    {
+        // 阻塞持有者不在就绪表中；资源或时间唤醒时才按新优先级入队。
+        p_mutex->Owner->Priority = CurrentTCB->Priority;
+    }
 }
 ```
 

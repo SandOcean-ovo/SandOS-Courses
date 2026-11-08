@@ -94,6 +94,8 @@ pos SCHED-02 ../../tests/target/tick_preempt.c "EVENT 1" "EVENT 4"
 pos SCHED-03 ../../tests/target/delay_wake.c "EVENT 1" "EVENT 3"
 pos SEM-01 ../../tests/target/sem_count.c
 pos SEM-02 ../../tests/target/sem_wait_fifo.c "EVENT 1" "EVENT 7"
+pos MUTEX-01 ../../tests/target/mutex_handoff.c "EVENT 1" "EVENT 10"
+pos MUTEX-02 ../../tests/target/mutex_bounds.c
 neg NEG-01 ../../tests/target/negative/neg_hang.c           2            # 卡死 -> 超时
 neg NEG-02 ../../tests/target/negative/neg_fail.c           1            # 主动失败
 neg NEG-03 ../../tests/target/negative/neg_fault.c          1            # HardFault

@@ -235,6 +235,18 @@ void OS_TaskResumeAndSchedule(OS_List *p_wait_list)
 
 /* 函数实现 ----------------------------------------------------------- */
 
+/**
+ * @brief 建立静态任务的初始栈与就绪节点，同时清空单锁所有权。
+ * @param tcb 由调用者提供的任务对象。
+ * @param task_function 任务入口。
+ * @param task_param 传给任务入口的参数。
+ * @param stack_init_address 栈缓冲区起点。
+ * @param stack_depth 栈元素数；本轮不新增容量或对齐边界检查。
+ * @param priority 静态基础优先级，数值越小优先级越高。
+ * @return OS_OK；空对象／入口／栈或非法优先级返回 OS_ERR_PARAM。
+ * @note 必须在启动前创建；运行期拒绝与栈大小专项仍待后续修复。
+ *       HeldMutex 位于 TCB 末尾，首字段 stackPtr 的汇编约定保持不变。
+ */
 OS_Status OS_TaskCreate(OS_TCB *tcb, OS_TaskFunc_t task_function, void *task_param, uint32_t *stack_init_address, uint32_t stack_depth, uint8_t priority)
 {
     if (tcb == NULL || task_function == NULL || stack_init_address == NULL || priority > OS_MAX_PRIO - 1)
@@ -248,6 +260,8 @@ OS_Status OS_TaskCreate(OS_TCB *tcb, OS_TaskFunc_t task_function, void *task_par
     tcb->State = TASK_READY;
     tcb->Priority = priority;
     tcb->OriginalPrio = priority;
+    /* 任务对象可能来自未清零内存；单锁限制必须从确定的空所有权开始。 */
+    tcb->HeldMutex = NULL;
 
     OS_ReadyListAdd(tcb);
     return OS_OK;
@@ -520,6 +534,12 @@ OS_Status OS_SemPostFromISR(OS_Sem *p_sem, uint8_t *p_HigherPrioTaskWoken)
     return OS_OK;
 }
 
+/**
+ * @brief 初始化尚未发布的静态互斥锁，清空所有权、深度与等待队列。
+ * @param p_mutex 尚无并发访问或等待者的对象，不能重置使用中的锁。
+ * @return OS_OK；空指针返回 OS_ERR_PARAM。
+ * @note 没有运行期重新初始化语义；OriginalPrio 字段保留上游布局，不用于多锁恢复。
+ */
 OS_Status OS_MutexInit(OS_Mutex *p_mutex)
 {
     if (p_mutex == NULL)
@@ -531,6 +551,14 @@ OS_Status OS_MutexInit(OS_Mutex *p_mutex)
     return OS_OK;
 }
 
+/**
+ * @brief 取得第一把锁、递归取得同锁，或无限等待并进行单锁直接优先级继承。
+ * @param p_mutex 已初始化且有效的互斥锁。
+ * @return OS_OK；空指针 OS_ERR_PARAM；同锁 255 层时 OS_ERR_NESTING；
+ *         已持其他锁时 OS_ERR_RESOURCE，拒绝时没有所有权、队列或优先级副作用。
+ * @note 仅线程且无用户外层临界区时调用；同优先级 FIFO，高优先级先等待。
+ *       上下文拒绝仍待专项实现；不支持有限超时、多锁或传递继承。
+ */
 OS_Status OS_MutexPend(OS_Mutex *p_mutex)
 {
     if (p_mutex == NULL)
@@ -538,15 +566,29 @@ OS_Status OS_MutexPend(OS_Mutex *p_mutex)
 
     OS_EnterCritical();
 
+    /* M1 只跟踪一把锁：在任何取得、继承、入队之前拒绝第二把不同锁。 */
+    if (CurrentTCB->HeldMutex != NULL && CurrentTCB->HeldMutex != p_mutex)
+    {
+        OS_ExitCritical();
+        return OS_ERR_RESOURCE;
+    }
+
     if (p_mutex->Owner == NULL)
     {
         p_mutex->Owner = CurrentTCB;
+        CurrentTCB->HeldMutex = p_mutex;
         p_mutex->NestCount = 1;
         OS_ExitCritical();
         return OS_OK;
     }
     else if (p_mutex->Owner == CurrentTCB)
     {
+        /* 首次持有也占一层；在加一前拒绝 255，不能让 uint8_t 回绕。 */
+        if (p_mutex->NestCount == UINT8_MAX)
+        {
+            OS_ExitCritical();
+            return OS_ERR_NESTING;
+        }
         p_mutex->NestCount++;
         OS_ExitCritical();
         return OS_OK;
@@ -608,6 +650,13 @@ OS_Status OS_MutexPend(OS_Mutex *p_mutex)
     }
 }
 
+/**
+ * @brief 释放一层同锁递归，最后一层直接交接所有权并恢复旧持有者优先级。
+ * @param p_mutex 已初始化的锁；调用者必须为持有者。
+ * @return OS_OK；空指针 OS_ERR_PARAM；非持有者 OS_ERR_NOT_OWNER。
+ * @note 深度未归零时保留所有权与继承；最终交接先更新持锁记录和 READY 状态，
+ *       再加入就绪队列并选择下一任务，不能让运行任务仍带 BLOCKED 状态。
+ */
 OS_Status OS_MutexPost(OS_Mutex *p_mutex)
 {
     if (p_mutex == NULL)
@@ -629,6 +678,9 @@ OS_Status OS_MutexPost(OS_Mutex *p_mutex)
         return OS_OK;
     }
 
+    /* 最后一层释放：先撤销本任务持锁记录，交接时再赋给新持有者。 */
+    CurrentTCB->HeldMutex = NULL;
+
     if (CurrentTCB->Priority != CurrentTCB->OriginalPrio)
     {
         OS_ReadyListRemove(CurrentTCB);
@@ -643,7 +695,10 @@ OS_Status OS_MutexPost(OS_Mutex *p_mutex)
     }
     OS_TCB *TaskToWake = List_PopHead(&p_mutex->WaitList);
     p_mutex->Owner = TaskToWake;
+    TaskToWake->HeldMutex = p_mutex;
     p_mutex->NestCount = 1;
+    /* 等待者取得锁后将继续运行；继承路径依赖 State 判断就绪节点归属。 */
+    TaskToWake->State = TASK_READY;
     OS_ReadyListAdd(TaskToWake);
     NextTCB = FindNextTask();
 
