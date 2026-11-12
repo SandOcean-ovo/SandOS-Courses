@@ -6,10 +6,11 @@ else
   printf "GDBCHK shared_update_is_masked_without_task_nesting FAIL\n"
   set $fails = $fails + 1
 end
-# NVIC ISPR0 是置位寄存器；写 bit0 挂起真实 IRQ0。保护正确时它暂时不能执行。
-set *(unsigned int *)0xe000e200 = 1
+# 用 fixture helper 让目标 CPU 执行 NVIC 写操作；避免旧 QEMU 忽略 GDB 直接写 PPB。
+# 此时 PRIMASK 已由生产代码置 1，dummy call 不应使 IRQ 越过保护区执行。
+call isr_test_pend_irq()
 printf "GDBDIAG INJECT primask=%u pending=%#x enabled=%#x irq_seen=%u\n", $primask, *(unsigned int *)0xe000e200, *(unsigned int *)0xe000e100, g_irq_seen
-if g_irq_seen == 0
+if g_irq_seen == 0 && $primask == 1 && (*(unsigned int *)0xe000e200 & 1) != 0
   printf "GDBCHK injected_irq_not_run_inside_guard PASS\n"
 else
   printf "GDBCHK injected_irq_not_run_inside_guard FAIL\n"

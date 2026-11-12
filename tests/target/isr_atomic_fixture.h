@@ -12,6 +12,18 @@ static OS_Sem sem;
 volatile uint8_t g_outer_woken;
 volatile uint32_t g_observed_ok, g_irq_seen, g_high_ran, g_finished, g_irq_ipsr;
 
+/**
+ * @brief GDB 在已屏蔽的更新窗口调用此测试 helper，让 CPU 自己写 NVIC。
+ * @return 无。
+ * @note noinline 保留可调用符号；main 在 IRQ 禁用时也调用一次并清 pending，防止链接裁剪。
+ *       避免依赖旧 QEMU 对调试器直接写 PPB 寄存器的支持，不改生产内核。
+ */
+__attribute__((noinline)) void isr_test_pend_irq(void)
+{
+    NVIC_SetPendingIRQ(UARTRX0_IRQn);
+    __DSB(); __ISB();
+}
+
 /** @brief 高优先级 IRQ 观察外层完成状态，再操作同一资源并请求调度。 @return 无。 @note 各层独立局部标记。 */
 void UARTRX0_Handler(void)
 {
@@ -59,6 +71,9 @@ static void task_low(void *unused)
 int main(void)
 {
     test_begin(ATOMIC_CASE); OS_Init(); OS_SemInit(&sem, 0);
+    NVIC_DisableIRQ(UARTRX0_IRQn);
+    isr_test_pend_irq();
+    NVIC_ClearPendingIRQ(UARTRX0_IRQn);
     OS_TaskCreate(&high, task_high, NULL, hs, 256, 1);
     OS_TaskCreate(&low, task_low, NULL, ls, 256, 5);
     OS_StartScheduler();
