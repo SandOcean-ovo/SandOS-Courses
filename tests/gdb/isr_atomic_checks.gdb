@@ -8,6 +8,7 @@ else
 end
 # NVIC ISPR0 是置位寄存器；写 bit0 挂起真实 IRQ0。保护正确时它暂时不能执行。
 set *(unsigned int *)0xe000e200 = 1
+printf "GDBDIAG INJECT primask=%u pending=%#x enabled=%#x irq_seen=%u\n", $primask, *(unsigned int *)0xe000e200, *(unsigned int *)0xe000e100, g_irq_seen
 if g_irq_seen == 0
   printf "GDBCHK injected_irq_not_run_inside_guard PASS\n"
 else
@@ -16,6 +17,7 @@ else
 end
 tbreak test_finish
 continue
+printf "GDBDIAG OBS finished=%#x irq_seen=%u observed=%u ipsr=%u high_ran=%u tick=%u mask=%u state=%u\n", g_finished, g_irq_seen, g_observed_ok, g_irq_ipsr, g_high_ran, g_SystemTickCount, $primask, high.State
 if g_finished == 0x150cafe && g_irq_seen == 1 && g_observed_ok == 1 && g_irq_ipsr == 16
   printf "GDBCHK irq_observes_completed_outer_update PASS\n"
 else
