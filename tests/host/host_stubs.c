@@ -45,3 +45,17 @@ uint8_t OS_GetTopPrio(uint32_t PrioMap)
 {
     return (uint8_t)__builtin_ctz(PrioMap);
 }
+
+/**
+ * @brief 主机纯 C 逻辑测试只模拟合法线程，不冒充异常寄存器验证。
+ * @return 固定为 0。
+ * @note 真实 ISR 与屏蔽寄存器的拒绝路径由 QEMU 用例负责。
+ */
+uint32_t OS_GetExceptionNumber(void) { return 0U; }
+
+/**
+ * @brief 主机测试默认未屏蔽调度。
+ * @return 固定为 0。
+ * @note 不用此桩证明 PRIMASK／BASEPRI／FAULTMASK 的硬件行为。
+ */
+uint32_t OS_IsSchedulingMasked(void) { return 0U; }

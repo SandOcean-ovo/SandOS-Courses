@@ -95,3 +95,22 @@ uint8_t OS_GetTopPrio(uint32_t PrioMap)
 {
     return __CLZ(__RBIT(PrioMap));
 }
+/**
+ * @brief 取得当前 Cortex-M3 异常号。
+ * @return IPSR 的值；线程为 0。
+ * @note 依据 CMSIS Core Register Access / __get_IPSR，只读取处理器状态。
+ */
+uint32_t OS_GetExceptionNumber(void)
+{
+    return __get_IPSR();
+}
+
+/**
+ * @brief 查询任何会阻止最低优先级 PendSV 的调用者屏蔽条件。
+ * @return 有效 PRIMASK、BASEPRI、FAULTMASK 任一非零时返回 1，否则为 0。
+ * @note 不把此查询当作保存／恢复接口；不改变任何屏蔽寄存器。
+ */
+uint32_t OS_IsSchedulingMasked(void)
+{
+    return (__get_PRIMASK() != 0U || __get_BASEPRI() != 0U || __get_FAULTMASK() != 0U) ? 1U : 0U;
+}

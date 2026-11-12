@@ -96,6 +96,8 @@ pos SEM-01 ../../tests/target/sem_count.c
 pos SEM-02 ../../tests/target/sem_wait_fifo.c "EVENT 1" "EVENT 7"
 pos MUTEX-01 ../../tests/target/mutex_handoff.c "EVENT 1" "EVENT 10"
 pos MUTEX-02 ../../tests/target/mutex_bounds.c
+pos CTX-01 ../../tests/target/blocking_context.c
+pos CTX-05 ../../tests/target/blocking_context_legal.c
 neg NEG-01 ../../tests/target/negative/neg_hang.c           2            # 卡死 -> 超时
 neg NEG-02 ../../tests/target/negative/neg_fail.c           1            # 主动失败
 neg NEG-03 ../../tests/target/negative/neg_fault.c          1            # HardFault
@@ -109,6 +111,10 @@ neg NEG-10 ../../tests/target/negative/neg_wrong_case.c     1            # 测�
 
 # GDB 检查：栈帧内容。GDBNEG 用来证明 GDB 检查本身不会空通过或永远通过
 gdbcase GDB-01    tests/gdb/pendsv_frame.gdb                   0       # 首次切换后的栈帧
+# 原生断言断点：核对拒绝发生前任务、队列和屏蔽状态均未改变。
+gdbcase CTX-02 tests/gdb/delay_context_assert.gdb 0 ../../tests/target/delay_context_critical.c
+gdbcase CTX-03 tests/gdb/delay_context_assert.gdb 0 ../../tests/target/delay_context_isr.c
+gdbcase CTX-04 tests/gdb/delay_context_assert.gdb 0 ../../tests/target/delay_context_masked.c
 gdbcase GDBNEG-01 tests/gdb/negative/neg_corrupt_frame.gdb     1       # 栈帧被破坏 -> 检查失败
 gdbcase GDBNEG-02 tests/gdb/negative/neg_never_hit.gdb         2 ../../tests/target/negative/neg_hang.c
 gdbcase GDBNEG-03 tests/gdb/negative/neg_no_check.gdb          1       # 没有任何检查输出 -> 失败

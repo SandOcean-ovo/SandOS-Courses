@@ -68,6 +68,7 @@ typedef enum {
 
     // 系统级错误
     OS_ERR_ISR        = 20,   ///< 错误：在中断中调用了不能用的函数
+    OS_ERR_CRITICAL   = 21,   ///< 阻塞接口在用户临界区或调度被屏蔽时拒绝，未改变状态
 } OS_Status;
 
 /** @} */ // end of group Core
@@ -240,6 +241,8 @@ OS_Status OS_TaskCreate(OS_TCB *tcb,
  * @details ticks > 0 时进入阻塞状态。ticks == 0 时保持就绪，移到本优先级队尾；
  *          无同优先级就绪伙伴时继续运行，不进入延时队列。
  * @param  ticks 延时的时间长度（单位：SysTick 节拍数，通常为 ms）
+ * @return 无；非法上下文先断言，不进入任何队列或请求调度。
+ * @note Delay(0) 同样只能在线程且未屏蔽调度时调用；不改变 void 签名。
  */
 void OS_Delay(uint32_t ticks);
 
@@ -301,7 +304,7 @@ OS_Status OS_SemInit(OS_Sem *p_sem, uint16_t init_count);
  * @brief 等待并消费一次许可，计数为 0 时无限阻塞。
  * @param p_sem 已初始化的信号量，在线程中调用。
  * @return 成功 OS_OK；空指针 OS_ERR_PARAM。
- * @note 无有限超时；ISR/外层临界区误用的入口拒绝仍待后续实现。
+ * @note 无有限超时；ISR 返回 OS_ERR_ISR，外层临界区／屏蔽调度返回 OS_ERR_CRITICAL，拒绝无副作用。
  */
 OS_Status OS_SemWait(OS_Sem *p_sem);
 
@@ -342,7 +345,7 @@ OS_Status OS_MutexInit(OS_Mutex *p_mutex);
  * @details 同锁递归与单锁直接优先级继承，不承诺多锁或传递继承。
  * @retval OS_ERR_NESTING 已持有同锁 255 层，状态不变。
  * @retval OS_ERR_RESOURCE 已持有另一把不同锁，立即拒绝且状态不变。
- * @note 线程上下文调用；不允许用户外层临界区。上下文拒绝专项仍待实现。
+ * @note 线程上下文调用；ISR 返回 OS_ERR_ISR，用户临界区／屏蔽状态返回 OS_ERR_CRITICAL。
  * @param  p_mutex 指向互斥锁对象的指针
  * @return OS_Status
  */
@@ -390,7 +393,8 @@ OS_Status OS_QueueSend(OS_Queue *p_queue, void *p_msg);
  * @details 如果队列为空，任务将阻塞直到有消息到达。
  * @param  p_queue      队列控制块指针
  * @param  p_msg_buffer 用于接收消息的缓冲区指针
- * @return OS_Status OS_OK 表示成功
+ * @return OS_OK；空参数 OS_ERR_PARAM；ISR 中 OS_ERR_ISR；外层临界区／屏蔽调度 OS_ERR_CRITICAL。
+ * @note 非法上下文不消费消息、不写目标缓冲区。
  */
 OS_Status OS_QueueReceive(OS_Queue *p_queue, void *p_msg_buffer);
 
@@ -442,7 +446,8 @@ OS_Status OS_MemInit(OS_Mem *p_mem, void *start_addr, uint32_t block_num, uint32
  * @brief  申请内存块
  * @details 从内存池中获取一个空闲块。如果没有空闲块，任务将阻塞。
  * @param  p_mem 内存池对象指针
- * @return void* 指向申请到的内存块地址
+ * @return 指向申请到的内存块；空对象、ISR 或调用者屏蔽调度时返回 NULL。
+ * @note 即使有空闲块也先检查上下文；非法上下文不消耗资源。
  */
 void* OS_MemGet(OS_Mem *p_mem);
 

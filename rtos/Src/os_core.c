@@ -377,8 +377,35 @@ void OS_Tick_Handler(void)
 #endif
 }
 
+/**
+ * @brief 在阻塞／调度 API 自身进入临界区之前检查调用者上下文。
+ * @return Handler 返回 OS_ERR_ISR；用户嵌套计数或架构屏蔽状态返回
+ *         OS_ERR_CRITICAL；合法线程返回 OS_OK。
+ * @note 仅查询不修复状态。ISR 优先于屏蔽错误，API 内部临界区不能再次调用它。
+ */
+static OS_Status OS_CheckBlockingContext(void)
+{
+    if (OS_GetExceptionNumber() != 0U)
+        return OS_ERR_ISR;
+    if (g_CriticalNesting != 0U || OS_IsSchedulingMasked() != 0U)
+        return OS_ERR_CRITICAL;
+    return OS_OK;
+}
+
+/**
+ * @brief 合法线程延时或在本优先级让出；非法上下文断言发生于所有状态修改之前。
+ * @param ticks 延时 tick 数，0 只让出同优先级执行机会。
+ * @return 无；不改变原有 void 接口。
+ * @note 不允许 ISR、用户外层临界区或调用者屏蔽调度；本次不修复屏蔽恢复机制。
+ */
 void OS_Delay(uint32_t ticks)
 {
+    OS_Status context = OS_CheckBlockingContext();
+    if (context != OS_OK)
+    {
+        OS_ASSERT(context == OS_OK);
+        return; /* 即使将来断言被配置为返回，也不能执行后续状态修改。 */
+    }
     OS_EnterCritical();
 
     if (ticks == 0U)
@@ -442,10 +469,20 @@ OS_Status OS_SemInit(OS_Sem *p_sem, uint16_t init_count)
     return OS_OK;
 }
 
+/**
+ * @brief 在线程中获取一次许可；不足时 FIFO 无限等待。
+ * @param p_sem 已初始化且仍有效的信号量。
+ * @return OS_OK；空指针 OS_ERR_PARAM；Handler 中 OS_ERR_ISR；外层临界区或屏蔽调度时 OS_ERR_CRITICAL。
+ * @note 入口检查在内部临界区之前；即使许可可用，非法上下文也不能消费计数。
+ */
 OS_Status OS_SemWait(OS_Sem *p_sem)
 {
     if (p_sem == NULL)
         return OS_ERR_PARAM;
+    OS_Status context = OS_CheckBlockingContext();
+    if (context != OS_OK)
+        return context;
+
     OS_EnterCritical();
     if (p_sem->count > 0) // 原本就有信号量
     {
@@ -557,12 +594,16 @@ OS_Status OS_MutexInit(OS_Mutex *p_mutex)
  * @return OS_OK；空指针 OS_ERR_PARAM；同锁 255 层时 OS_ERR_NESTING；
  *         已持其他锁时 OS_ERR_RESOURCE，拒绝时没有所有权、队列或优先级副作用。
  * @note 仅线程且无用户外层临界区时调用；同优先级 FIFO，高优先级先等待。
- *       上下文拒绝仍待专项实现；不支持有限超时、多锁或传递继承。
+ *       ISR 或调用者屏蔽调度时拒绝；不支持有限超时、多锁或传递继承。
  */
 OS_Status OS_MutexPend(OS_Mutex *p_mutex)
 {
     if (p_mutex == NULL)
         return OS_ERR_PARAM;
+
+    OS_Status context = OS_CheckBlockingContext();
+    if (context != OS_OK)
+        return context;
 
     OS_EnterCritical();
 
@@ -795,10 +836,21 @@ OS_Status OS_QueueSendFromISR(OS_Queue *p_queue, void *p_msg, uint8_t *p_HigherP
     return OS_OK;
 }
 
+/**
+ * @brief 在线程中接收一条消息；空队列时 FIFO 无限等待。
+ * @param p_queue 已初始化且仍有效的队列。
+ * @param p_msg_buffer 可写空间至少为队列 MsgSize 字节的目标缓冲区。
+ * @return OS_OK；空指针 OS_ERR_PARAM；Handler 中 OS_ERR_ISR；外层临界区或屏蔽调度时 OS_ERR_CRITICAL。
+ * @note 拒绝路径不写目标缓冲区；醒后重新检查资源时不重复检查 API 自身的临界区。
+ */
 OS_Status OS_QueueReceive(OS_Queue *p_queue, void *p_msg_buffer)
 {
     if (p_queue == NULL || p_msg_buffer == NULL)
         return OS_ERR_PARAM;
+
+    OS_Status context = OS_CheckBlockingContext();
+    if (context != OS_OK)
+        return context;
 
     OS_EnterCritical();
 
@@ -890,9 +942,19 @@ OS_Status OS_MemInit(OS_Mem *p_mem, void *start_addr, uint32_t block_num, uint32
     return OS_OK;
 }
 
+/**
+ * @brief 在线程中获取一块内存；耗尽时 FIFO 无限等待。
+ * @param p_mem 已初始化且仍有效的定长内存池。
+ * @return 成功时块地址；空指针、Handler、外层临界区或屏蔽调度时 NULL。
+ * @note 保持现有指针签名，M1 不区分 NULL 的具体错误；拒绝发生在摘取空闲块之前。
+ */
 void *OS_MemGet(OS_Mem *p_mem)
 {
     if (p_mem == NULL)
+        return NULL;
+
+    OS_Status context = OS_CheckBlockingContext();
+    if (context != OS_OK)
         return NULL;
 
     OS_EnterCritical();

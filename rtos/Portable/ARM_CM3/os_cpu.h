@@ -63,4 +63,18 @@ void OS_Disable_IRQ(void);
  */
 uint8_t OS_GetTopPrio(uint32_t PrioMap);
 
+
+/**
+ * @brief 只读取得当前异常号，用于阻塞 API 的入口约束。
+ * @return 0 表示线程模式，非零表示 Handler 模式。
+ * @note Cortex-M3 由 IPSR 读取；不改变中断屏蔽状态。
+ */
+uint32_t OS_GetExceptionNumber(void);
+
+/**
+ * @brief 查询调用者是否屏蔽了本端口所需的调度异常。
+ * @return PRIMASK、BASEPRI 或 FAULTMASK 任一非零时为 1，否则为 0。
+ * @note 本端口 PendSV 处于最低可配置优先级；不是进入／退出临界区操作。
+ */
+uint32_t OS_IsSchedulingMasked(void);
 #endif /* __OS_CPU_H */

@@ -44,7 +44,8 @@ try {
     # 必须在 Bash 内恢复 UCRT64 优先级，否则新编译 cc1 的 DLL 搜索可能失败。
     # 工具路径通过环境变量传递，不把用户路径拼接为可执行 shell 代码。
     $env:SANDOS_TEST_TOOL_PATH = "$QemuBin;$MakeBin;$GnuBin"
-    & $BashPath -c 'export PATH="$(cygpath -u -p "$SANDOS_TEST_TOOL_PATH"):$PATH"; source "$0"' tests/scripts/run_all.sh
+    # 非交互 Bash 不一定自带 /usr/bin；先提供 cygpath、dirname 和 mkdir。
+    & $BashPath -c 'export PATH="/usr/bin:$PATH"; export PATH="$(cygpath -u -p "$SANDOS_TEST_TOOL_PATH"):$PATH"; source "$0"' tests/scripts/run_all.sh
     $taskExit = $LASTEXITCODE
 } finally {
     $env:PATH = $taskOldPath
