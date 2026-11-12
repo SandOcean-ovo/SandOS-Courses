@@ -286,6 +286,14 @@ void OS_EnterCritical(void);
  */
 void OS_ExitCritical(void);
 
+/**
+ * @brief 普通 ISR 尾部重选最新最高优先级就绪任务并按需挂起 PendSV。
+ * @param higher_prio_woken 调用者从 FALSE 开始累计的局部标记，非零请求重选。
+ * @return 无；线程误用断言。
+ * @note TRUE 时独立保护下重选；FALSE 不清 pending、不轮转，系统不可调度时无操作。
+ */
+void OS_YieldFromISR(uint8_t higher_prio_woken);
+
 /** @} */ // end of group Core
 
 
@@ -323,8 +331,8 @@ OS_Status OS_SemPost(OS_Sem *p_sem);
  * @param p_sem 已初始化的信号量。
  * @param p_HigherPrioTaskWoken 可选输出；成功唤醒更高优先级任务时为 TRUE。
  * @return OS_OK、OS_ERR_PARAM 或 OS_ERR_OVERFLOW。
- * @note 失败不修改计数、队列或输出标记。成功标记累积、共享状态保护与
- *       ISR 尾部调度尚待专项修复，不能据计数测试宣称完整中断安全。
+ * @note 独立保存／恢复 PRIMASK；标记只累计 TRUE，其他成功和失败均保持原值。
+ *       调用者初始化局部 FALSE，最后调用 OS_YieldFromISR。
  */
 OS_Status OS_SemPostFromISR(OS_Sem *p_sem, uint8_t *p_HigherPrioTaskWoken);
 
@@ -405,7 +413,8 @@ OS_Status OS_QueueReceive(OS_Queue *p_queue, void *p_msg_buffer);
  * @details 中断安全版本，不会阻塞。
  * @param  p_queue   队列控制块指针
  * @param  p_msg     要发送的消息数据的指针
- * @param  p_HigherPrioTaskWoken 输出参数，如果唤醒了更高优先级任务则置为 TRUE
+ * @param  p_HigherPrioTaskWoken 可选局部累计标记，只置 TRUE，不覆盖已有结果。
+ * @note 独立 PRIMASK 保护；满队列失败也保持原标记，ISR 尾部调用 OS_YieldFromISR。
  * @return OS_Status
  * @retval OS_OK         发送成功
  * @retval OS_ERR_Q_FULL 队列已满
@@ -418,7 +427,8 @@ OS_Status OS_QueueSendFromISR(OS_Queue *p_queue, void *p_msg, uint8_t *p_HigherP
  * @details 中断安全版本，不会阻塞。如果队列为空则立即返回错误。
  * @param  p_queue      队列控制块指针
  * @param  p_msg_buffer 用于接收消息的缓冲区指针
- * @param  p_HigherPrioTaskWoken 输出参数（预留，当前未使用）
+ * @param  p_HigherPrioTaskWoken 可选累计标记，本接口始终保持原值。
+ * @note 独立 PRIMASK 保护；M1 不唤醒发送者，不清除先前 TRUE。
  * @return OS_Status
  * @retval OS_OK          接收成功
  * @retval OS_ERR_RESOURCE 队列为空

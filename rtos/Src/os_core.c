@@ -235,6 +235,31 @@ void OS_TaskResumeAndSchedule(OS_List *p_wait_list)
     }
 }
 
+/**
+ * @brief ISR 尾部根据最新全部就绪状态请求切换，不在 Handler 内直接切换任务。
+ * @param higher_prio_woken 当前 ISR 的累计唤醒标记，非零表示需要重选。
+ * @return 无；线程误用断言；FALSE 或系统不可调度时无操作。
+ * @note 嵌套 ISR 可各自调用。重选与挂起 PendSV 在同一保护内，不能用旧 NextTCB。
+ */
+void OS_YieldFromISR(uint8_t higher_prio_woken)
+{
+    if (OS_GetExceptionNumber() == 0U)
+    {
+        OS_ASSERT(0);
+        return;
+    }
+    if (higher_prio_woken == FALSE)
+        return;
+    uint32_t saved_mask = OS_SaveIRQ();
+    if (g_OSRunning != FALSE && CurrentTCB != NULL)
+    {
+        NextTCB = FindNextTask();
+        if (NextTCB != CurrentTCB)
+            OS_Schedule();
+    }
+    OS_RestoreIRQ(saved_mask);
+}
+
 /* 函数实现 ----------------------------------------------------------- */
 
 /**
@@ -321,6 +346,11 @@ void OS_StartScheduler(void)
         ;
 }
 
+/**
+ * @brief SysTick 推进时间、唤醒到期任务并选择下一就绪任务。
+ * @return 无；未启动时无操作，启动中 CurrentTCB 检查仍遵循现有断言。
+ * @note 与资源 ISR 用同一 PRIMASK 保护共享调度表；不借任务嵌套计数，不修启动窗口。
+ */
 void OS_Tick_Handler(void)
 {
 #if OS_BENCHMARK_ENABLE
@@ -341,6 +371,8 @@ void OS_Tick_Handler(void)
 
     // 1. 安全检查
     OS_ASSERT(CurrentTCB != NULL);
+
+    uint32_t saved_mask = OS_SaveIRQ(); /* 与高优先级资源 ISR 的链表更新串行。 */
 
     OS_CheckStackOverflow(); // 栈溢出检查
 
@@ -378,6 +410,7 @@ void OS_Tick_Handler(void)
         Benchmark_RuntimeRecordKernelTick(DWT->CYCCNT - benchmark_tick_start);
     }
 #endif
+    OS_RestoreIRQ(saved_mask);
 }
 
 /**
@@ -555,46 +588,43 @@ OS_Status OS_SemPost(OS_Sem *p_sem)
 }
 
 /**
- * @brief ISR 释放许可的计数边界处理；完整保护/调度路径仍按 ISR 专项验证。
- * @param p_sem 已初始化的信号量。
- * @param p_HigherPrioTaskWoken 可选唤醒输出；参数错误或计数溢出不修改它。
- * @return OS_OK、OS_ERR_PARAM 或 OS_ERR_OVERFLOW。
- * @note 先拒绝无等待者时的溢出，避免 uint16_t 回绕；本轮不改变成功唤醒路径。
+ * @brief 在 ISR 保护区内累计更高优先级唤醒结果。
+ * @param task 本次实际唤醒的任务，可为 NULL。
+ * @param flag 调用者的累计标记，可为 NULL。
+ * @return 无。
+ * @note 只置 TRUE 不清零；启动前无 CurrentTCB 时不作任务比较。
+ */
+static void OS_RecordISRWakeup(OS_TCB *task, uint8_t *flag)
+{
+    if (flag != NULL && task != NULL && g_OSRunning != FALSE && CurrentTCB != NULL &&
+        task->Priority < CurrentTCB->Priority)
+        *flag = TRUE;
+}
+
+/**
+ * @brief ISR 释放许可：在独立保护中检查上限、迁移等待者并累计唤醒。
+ * @param p_sem 已初始化信号量，不能并发重新初始化。
+ * @param p_HigherPrioTaskWoken 可选局部累计标记；仅可能置 TRUE。
+ * @return OS_OK、OS_ERR_PARAM 或 OS_ERR_OVERFLOW；失败不改变对象和标记。
+ * @note 不直接调度；调用者在 ISR 尾部把累计标记传给 OS_YieldFromISR。
  */
 OS_Status OS_SemPostFromISR(OS_Sem *p_sem, uint8_t *p_HigherPrioTaskWoken)
 {
     if (p_sem == NULL)
         return OS_ERR_PARAM;
-
-    /* 溢出也属于失败：在写输出标记前拒绝，保留调用者原值。
-     * 此处尚未加入独立 ISR 保存/恢复保护；并发完整性属于后续专项。 */
-    if (p_sem->WaitList.Head == NULL && p_sem->count == UINT16_MAX)
-        return OS_ERR_OVERFLOW;
-
-    /* 成功路径沿用已有输出行为，累积唤醒标记的修复另项处理。 */
-    if (p_HigherPrioTaskWoken != NULL)
-        *p_HigherPrioTaskWoken = FALSE;
-
+    uint32_t saved_mask = OS_SaveIRQ();
     if (p_sem->WaitList.Head == NULL)
     {
-        /* 没有任务在等待，直接增加计数 */
+        if (p_sem->count == UINT16_MAX)
+        {
+            OS_RestoreIRQ(saved_mask);
+            return OS_ERR_OVERFLOW;
+        }
         p_sem->count++;
     }
     else
-    {
-        /* 有任务在等待，唤醒第一个 */
-        OS_TCB *TaskToWake = OS_TaskResume(&p_sem->WaitList);
-
-        /* 检查是否需要上下文切换 */
-        if (p_HigherPrioTaskWoken != NULL && TaskToWake != NULL)
-        {
-            if (TaskToWake->Priority < CurrentTCB->Priority)
-            {
-                *p_HigherPrioTaskWoken = TRUE;
-            }
-        }
-    }
-
+        OS_RecordISRWakeup(OS_TaskResume(&p_sem->WaitList), p_HigherPrioTaskWoken);
+    OS_RestoreIRQ(saved_mask);
     return OS_OK;
 }
 
@@ -818,48 +848,31 @@ OS_Status OS_QueueSend(OS_Queue *p_queue, void *p_msg)
     return OS_OK;
 }
 
+/**
+ * @brief ISR 非阻塞入队；复制、计数和唤醒位于同一独立保护区。
+ * @param p_queue 已初始化且有效的队列。
+ * @param p_msg 至少 MsgSize 字节的有效源，不能与队列内部状态或标记重叠。
+ * @param p_HigherPrioTaskWoken 可选累计标记，只可能置 TRUE。
+ * @return OS_OK；空参数 OS_ERR_PARAM；满队列 OS_ERR_Q_FULL，失败无副作用。
+ * @note 不直接调度；原 PRIMASK 在每条返回路径恢复。
+ */
 OS_Status OS_QueueSendFromISR(OS_Queue *p_queue, void *p_msg, uint8_t *p_HigherPrioTaskWoken)
 {
     if (p_queue == NULL || p_msg == NULL)
         return OS_ERR_PARAM;
-
-    /* 初始化输出参数 */
-    if (p_HigherPrioTaskWoken != NULL)
-        *p_HigherPrioTaskWoken = FALSE;
-
-    /* 队列满，直接返回错误（ISR 中不能阻塞） */
+    uint32_t saved_mask = OS_SaveIRQ();
     if (p_queue->MsgCount >= p_queue->QSize)
     {
+        OS_RestoreIRQ(saved_mask);
         return OS_ERR_Q_FULL;
     }
-
-    /* 计算写入地址 */
-    uint8_t *WriteAddr = (uint8_t *)p_queue->Buffer + ((p_queue->Head) * (p_queue->MsgSize));
-
-    /* 拷贝消息 */
-    memcpy(WriteAddr, p_msg, p_queue->MsgSize);
-
-    /* 更新写指针（环形缓冲区） */
+    uint8_t *write_addr = (uint8_t *)p_queue->Buffer + p_queue->Head * p_queue->MsgSize;
+    memcpy(write_addr, p_msg, p_queue->MsgSize);
     p_queue->Head = (p_queue->Head + 1) % p_queue->QSize;
-
-    /* 消息数 + 1 */
     p_queue->MsgCount++;
-
-    /* 如果有任务在等待读取，唤醒它 */
     if (p_queue->WaitReadList.Head != NULL)
-    {
-        OS_TCB *TaskToWake = OS_TaskResume(&p_queue->WaitReadList);
-
-        /* 检查是否需要上下文切换 */
-        if (p_HigherPrioTaskWoken != NULL)
-        {
-            if (TaskToWake->Priority < CurrentTCB->Priority)
-            {
-                *p_HigherPrioTaskWoken = TRUE;
-            }
-        }
-    }
-
+        OS_RecordISRWakeup(OS_TaskResume(&p_queue->WaitReadList), p_HigherPrioTaskWoken);
+    OS_RestoreIRQ(saved_mask);
     return OS_OK;
 }
 
@@ -900,33 +913,30 @@ OS_Status OS_QueueReceive(OS_Queue *p_queue, void *p_msg_buffer)
     return OS_OK;
 }
 
+/**
+ * @brief ISR 非阻塞出队；空检查与数据复制在独立保护内完成。
+ * @param p_queue 已初始化且有效的队列。
+ * @param p_msg_buffer 至少 MsgSize 字节的目标，不能与队列状态或标记重叠。
+ * @param p_HigherPrioTaskWoken 可选累计标记，M1 没有阻塞发送者，始终保持原值。
+ * @return OS_OK；空参数 OS_ERR_PARAM；空队列 OS_ERR_RESOURCE，失败不写目标。
+ * @note 不清除先前唤醒结果；不引入阶段 2B 的阻塞发送。
+ */
 OS_Status OS_QueueReceiveFromISR(OS_Queue *p_queue, void *p_msg_buffer, uint8_t *p_HigherPrioTaskWoken)
 {
     if (p_queue == NULL || p_msg_buffer == NULL)
         return OS_ERR_PARAM;
-
-    /* 初始化输出参数（预留） */
-    if (p_HigherPrioTaskWoken != NULL)
-        *p_HigherPrioTaskWoken = FALSE;
-
-    /* 队列为空，直接返回错误（ISR 中不能阻塞） */
+    (void)p_HigherPrioTaskWoken;
+    uint32_t saved_mask = OS_SaveIRQ();
     if (p_queue->MsgCount == 0)
     {
+        OS_RestoreIRQ(saved_mask);
         return OS_ERR_RESOURCE;
     }
-
-    /* 计算读取地址 */
-    uint8_t *ReadAddr = (uint8_t *)p_queue->Buffer + ((p_queue->Tail) * (p_queue->MsgSize));
-
-    /* 拷贝消息 */
-    memcpy(p_msg_buffer, ReadAddr, p_queue->MsgSize);
-
-    /* 更新读指针（环形缓冲区） */
+    uint8_t *read_addr = (uint8_t *)p_queue->Buffer + p_queue->Tail * p_queue->MsgSize;
+    memcpy(p_msg_buffer, read_addr, p_queue->MsgSize);
     p_queue->Tail = (p_queue->Tail + 1) % p_queue->QSize;
-
-    /* 消息数 - 1 */
     p_queue->MsgCount--;
-
+    OS_RestoreIRQ(saved_mask);
     return OS_OK;
 }
 

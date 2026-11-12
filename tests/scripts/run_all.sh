@@ -102,6 +102,10 @@ pos CRIT-01 ../../tests/target/critical_restore.c
 pos CRIT-02 ../../tests/target/irq_restore.c
 neg CRITNEG-01 ../../tests/target/negative/neg_critical_exit.c 1
 neg CRITNEG-02 ../../tests/target/negative/neg_critical_isr.c 1
+pos ISR-01 ../../tests/target/isr_flags.c
+pos ISR-02 ../../tests/target/isr_wakeup.c "EVENT 1" "EVENT 14"
+pos ISR-05 ../../tests/target/isr_priority.c
+neg ISRNEG-01 ../../tests/target/negative/neg_yield_isr_thread.c 1
 neg NEG-01 ../../tests/target/negative/neg_hang.c           2            # 卡死 -> 超时
 neg NEG-02 ../../tests/target/negative/neg_fail.c           1            # 主动失败
 neg NEG-03 ../../tests/target/negative/neg_fault.c          1            # HardFault
@@ -119,6 +123,9 @@ gdbcase GDB-01    tests/gdb/pendsv_frame.gdb                   0       # 首次�
 gdbcase CTX-02 tests/gdb/delay_context_assert.gdb 0 ../../tests/target/delay_context_critical.c
 gdbcase CTX-03 tests/gdb/delay_context_assert.gdb 0 ../../tests/target/delay_context_isr.c
 gdbcase CTX-04 tests/gdb/delay_context_assert.gdb 0 ../../tests/target/delay_context_masked.c
+# GDB 精确挂起 IRQ，检查资源与 tick 更新不能被更高优先级 ISR 拆开。
+gdbcase ISR-03 tests/gdb/isr_atomic_svc.gdb 0 ../../tests/target/isr_atomic_svc.c
+gdbcase ISR-04 tests/gdb/isr_atomic_tick.gdb 0 ../../tests/target/isr_atomic_tick.c
 gdbcase GDBNEG-01 tests/gdb/negative/neg_corrupt_frame.gdb     1       # 栈帧被破坏 -> 检查失败
 gdbcase GDBNEG-02 tests/gdb/negative/neg_never_hit.gdb         2 ../../tests/target/negative/neg_hang.c
 gdbcase GDBNEG-03 tests/gdb/negative/neg_no_check.gdb          1       # 没有任何检查输出 -> 失败
