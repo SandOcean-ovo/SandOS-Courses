@@ -24,8 +24,8 @@ uint32_t *OS_StackInit(void *task_function, void *task_param,
     return stack_init_address + stack_depth;
 }
 
-/** @brief 桩：不配置定时器 */
-void OS_Init_Timer(uint32_t ms) { (void)ms; }
+/** @brief 桩：不配置定时器。 @param ms 未使用。 @return 固定成功 0。 @note 不验证硬件时钟边界。 */
+uint32_t OS_Init_Timer(uint32_t ms) { (void)ms; return 0U; }
 
 /** @brief 桩：只记录被请求调度的次数 */
 void OS_Schedule(void) { g_host_schedule_calls++; }

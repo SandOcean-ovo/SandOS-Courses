@@ -325,7 +325,7 @@ void OS_Init(void)
 
 /**
  * @brief 从未启动状态准备首次 PendSV；直到上下文恢复完成才允许 tick 调度。
- * @return 正常不返回；重复启动或非法调用上下文先断言，再防御返回。
+ * @return 正常不返回；重复启动、非法上下文或时钟配置失败先断言，再防御返回。
  * @note Timer 不得自行开中断。准备期间使用局部保护，不修改任务临界区计数。
  */
 void OS_StartScheduler(void)
@@ -340,7 +340,16 @@ void OS_StartScheduler(void)
     g_OSRunning = OS_SCHED_STARTING;
     NextTCB = FindNextTask();
     CurrentTCB = NULL; /* 首次 PendSV 不保存尚不存在的任务上下文。 */
-    OS_Init_Timer(1);
+    if (OS_Init_Timer(1) != 0U)
+    {
+        /* 时钟／周期配置未写硬件；恢复为未启动，不能带失败配置触发首次 PendSV。 */
+        g_OSRunning = OS_SCHED_STOPPED;
+        CurrentTCB = NULL;
+        NextTCB = NULL;
+        OS_RestoreIRQ(saved_mask);
+        OS_ASSERT(0);
+        return;
+    }
     OS_Schedule();
     /* SysTick 比 PendSV 优先级高；即使二者同时 pending，STARTING 的 tick 也只忽略。
      * RUNNING 由 PendSV 在 PSP／寄存器／异常返回方式全部就绪后发布。 */

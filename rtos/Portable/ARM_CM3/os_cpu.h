@@ -20,7 +20,7 @@
 
 #include "os_common.h"
 /* 板级头文件：由各 ports/<板>/ 目录提供，构建时用 -I 选择。
- * 它负责提供 CMSIS Core（含 IRQn_Type、SysTick、NVIC、SCB）以及 OS_CPU_CLOCK_HZ，
+ * 它负责提供 CMSIS Core（含 IRQn_Type、SysTick、NVIC、SCB）以及 OS_BoardClockHz()，
  * 使通用内核和本移植层不再依赖某个厂商的头文件（如 stm32f1xx.h）。 */
 #include "os_board.h"
 
@@ -38,12 +38,12 @@ uint32_t* OS_StackInit(void* task_function, void* task_param, uint32_t* stack_in
 
 
 /**
- * @brief  初始化SysTick
- * @param  ms: 时间片长度（单位ms）
- * @return 无。
- * @note 保持全局屏蔽状态；Start 配对恢复，不由定时器初始化强制开中断。
+ * @brief 在初始化阶段精确配置 CPU 时钟源 SysTick，恢复进入前 PRIMASK。
+ * @param ms 正整数毫秒周期；默认 Start 传 1，OS_Delay 的单位仍为 tick。
+ * @return 0 成功；1 为时钟／参数不能精确表示或超出 2～0x1000000 周期，失败不写硬件。
+ * @note 板级时钟必须已稳定；本函数不支持运行中改频。不能自行开放全局中断。
  */
-void OS_Init_Timer(uint32_t ms);
+uint32_t OS_Init_Timer(uint32_t ms);
 
 /**
  * @brief  请求调度（触发上下文切换）

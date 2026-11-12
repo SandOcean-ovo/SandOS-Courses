@@ -14,7 +14,7 @@
  *   4. __NVIC_PRIO_BITS —— NVIC 实现的优先级位数
  *   5. __Vendor_SysTickConfig —— 是否由厂商自定义 SysTick 配置
  *
- * 本文件另外提供内核自己的 OS_CPU_CLOCK_HZ，用于把毫秒换算成 SysTick 重载值。
+ * 本文件提供 OS_BoardClockHz()，让端口读取已经建立的 CPU 时钟。
  ******************************************************************************
  */
 #ifndef OS_BOARD_H
@@ -49,9 +49,7 @@ typedef enum IRQn
 
 /**
  * NVIC 实现的优先级位数。mps2-an385 为 3 位（8 级），STM32F103 为 4 位（16 级）。
- * 注意：CMSIS 的 NVIC_SetPriority 会先左移 (8 - 位数) 再截断到 8 位，
- *       所以 os_cpu.c 里写的 PendSV=15、SysTick=14 在 3 位下会被截断为 7 和 6，
- *       “PendSV 比 SysTick 优先级更低”的相对顺序依然成立，见 docs 中的说明。
+ * 端口根据此位数选择最低 PendSV 和高一级 SysTick，不依赖固定数字截断。
  */
 #define __NVIC_PRIO_BITS        3U
 
@@ -65,5 +63,12 @@ typedef enum IRQn
  * 只用于把 tick 周期换算成 SysTick 重载值；QEMU 中的运行时间不代表真机周期。
  */
 #define OS_CPU_CLOCK_HZ         25000000UL
+
+/**
+ * @brief 返回本板已经建立且稳定的 CPU 时钟频率。
+ * @return QEMU mps2-an385 固定的 25000000 Hz。
+ * @note 真实板适配必须返回初始化／更新后的实际 CPU 时钟，不能照搬此常数。
+ */
+uint32_t OS_BoardClockHz(void);
 
 #endif /* OS_BOARD_H */

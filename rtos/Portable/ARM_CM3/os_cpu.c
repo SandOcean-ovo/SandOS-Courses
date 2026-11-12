@@ -55,31 +55,32 @@ uint32_t *OS_StackInit(void *task_function, void *task_param, uint32_t *stack_in
 }
 
 /**
- * @brief 配置 SysTick 及调度异常优先级，保留调用者的全局屏蔽状态。
- * @param ms tick 周期毫秒数；当前时钟换算／错误处理边界另有专项。
- * @return 无；当前配置失败仍停止在既有错误路径。
- * @note 不能自行开全局中断，否则会拆开 Start 的原子准备窗口。
+ * @brief 使用已建立的板级 CPU 时钟精确配置初始化阶段的 SysTick。
+ * @param ms 正整数毫秒周期。
+ * @return 0 成功；1 为参数、精度或 24 位周期边界失败，失败不写任何寄存器。
+ * @note 64 位乘法先于除法，不回绕、不截断小数；LOAD=0 不能生成所需周期请求。
+ *       在写硬件前完成全部校验，保护内最后启用计数，再恢复原 PRIMASK。
  */
-void OS_Init_Timer(uint32_t ms)
+uint32_t OS_Init_Timer(uint32_t ms)
 {
-    /* 重载值 = 每毫秒的时钟周期数 * 毫秒数。
-     * 时钟频率由板级头文件 os_board.h 的 OS_CPU_CLOCK_HZ 提供，
-     * 不再写死 72 MHz（QEMU mps2-an385 为 25 MHz，STM32F103 常用 72 MHz）。
-     * 先除后乘避免 clock*ms 在 32 位下溢出；时钟需为 1000 的整数倍，否则有舍入误差。 */
-    uint32_t ticks = (OS_CPU_CLOCK_HZ / 1000U) * ms;
+    uint32_t clock_hz = OS_BoardClockHz();
+    uint64_t product = (uint64_t)clock_hz * (uint64_t)ms;
+    if (clock_hz == 0U || ms == 0U || product % 1000U != 0U)
+        return 1U;
+    uint64_t cycles = product / 1000U;
+    if (cycles < 2U || cycles > (uint64_t)SysTick_LOAD_RELOAD_Msk + 1U)
+        return 1U;
 
-    if (SysTick_Config(ticks))
-    {
-        while (1)
-            ; /* 配置失败了，死循环 */
-    }
-
-    /* 设置优先级 */
-    NVIC_SetPriority(PendSV_IRQn, 15);
-
-    NVIC_SetPriority(SysTick_IRQn, 14);
-
-    /* 全局屏蔽由调用者配对恢复；这里不得无条件 enable。 */
+    uint32_t saved_mask = OS_SaveIRQ();
+    uint32_t lowest_priority = (1UL << __NVIC_PRIO_BITS) - 1UL;
+    SysTick->CTRL = 0U;
+    SysTick->LOAD = (uint32_t)cycles - 1U;
+    SysTick->VAL = 0U;
+    NVIC_SetPriority(PendSV_IRQn, lowest_priority);
+    NVIC_SetPriority(SysTick_IRQn, lowest_priority - 1U);
+    SysTick->CTRL = SysTick_CTRL_CLKSOURCE_Msk | SysTick_CTRL_TICKINT_Msk | SysTick_CTRL_ENABLE_Msk;
+    OS_RestoreIRQ(saved_mask);
+    return 0U;
 }
 
 void OS_Schedule(void)

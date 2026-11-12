@@ -87,7 +87,7 @@ uint32_t Stack_Blink[128];
 void Task_Blink(void *param) {
     while (1) {
         LED_Toggle();
-        OS_Delay(500);  // 阻塞延时 500ms
+        OS_Delay(500);  // 延时 500 tick；默认 1 kHz 时为 500 ms
     }
 }
 
@@ -121,3 +121,5 @@ int main(void) {
 MIT License - 欢迎学习、修改和商业使用。
 
 阻塞／调度接口 `OS_Delay`、`OS_SemWait`、`OS_MutexPend`、`OS_QueueReceive`、`OS_MemGet` 仅允许可调度的线程调用。Cortex-M3 入口检查 ISR、用户外层临界区及中断屏蔽状态；状态接口返回 `OS_ERR_ISR`／`OS_ERR_CRITICAL`，取块返回 NULL，void 延时触发断言，均在修改状态之前拒绝。详见阶段 0《M1接口契约》和阶段 2 验证记录；任务临界区已保存／恢复最外层原 PRIMASK，ISR 使用独立 OS_SaveIRQ／OS_RestoreIRQ 配对原语；三个现有 FromISR 已加入独立保护、累计唤醒，并由 ISR 尾部调用 OS_YieldFromISR；真实异常嵌套及非 tick 唤醒已通过 QEMU 专项。启动状态现区分 STOPPED／STARTING／RUNNING，首次上下文恢复完成后才允许 tick 调度；AC5 完整内核与真机仍待验证。
+
+SysTick 配置从板级 `OS_BoardClockHz()` 取时钟，以 64 位乘积精确计算周期；超范围、小数计数或不能产生周期请求的 LOAD=0 配置会被拒绝。默认 Start 配置 1 ms/tick；`OS_Delay` 始终以 tick 为单位。当前时钟实现和边界回归使用 QEMU，STM32 应返回更新后的实际 CPU 时钟，其完整 Keil 工程与真机仍按 M2 验证。

@@ -110,6 +110,7 @@ neg ISRNEG-01 ../../tests/target/negative/neg_yield_isr_thread.c 1
 WRAP='OS_Schedule OS_Tick_Handler' pos START-01 ../../tests/target/startup_race.c
 neg STARTNEG-01 ../../tests/target/negative/neg_start_repeat.c 1
 neg STARTNEG-02 ../../tests/target/negative/neg_start_masked.c 1
+WRAP='OS_BoardClockHz' pos TICK-01 ../../tests/target/tick_config.c
 neg NEG-01 ../../tests/target/negative/neg_hang.c           2            # 卡死 -> 超时
 neg NEG-02 ../../tests/target/negative/neg_fail.c           1            # 主动失败
 neg NEG-03 ../../tests/target/negative/neg_fault.c          1            # HardFault
@@ -131,6 +132,7 @@ gdbcase CTX-04 tests/gdb/delay_context_assert.gdb 0 ../../tests/target/delay_con
 gdbcase ISR-03 tests/gdb/isr_atomic_svc.gdb 0 ../../tests/target/isr_atomic_svc.c
 gdbcase ISR-04 tests/gdb/isr_atomic_tick.gdb 0 ../../tests/target/isr_atomic_tick.c
 WRAP='OS_Schedule OS_Tick_Handler' gdbcase START-02 tests/gdb/startup_commit.gdb 0 ../../tests/target/startup_race.c
+WRAP='OS_BoardClockHz' gdbcase TICK-02 tests/gdb/tick_start_fail.gdb 0 ../../tests/target/tick_start_fail.c
 gdbcase GDBNEG-01 tests/gdb/negative/neg_corrupt_frame.gdb     1       # 栈帧被破坏 -> 检查失败
 gdbcase GDBNEG-02 tests/gdb/negative/neg_never_hit.gdb         2 ../../tests/target/negative/neg_hang.c
 gdbcase GDBNEG-03 tests/gdb/negative/neg_no_check.gdb          1       # 没有任何检查输出 -> 失败
