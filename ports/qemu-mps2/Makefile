@@ -53,6 +53,11 @@ LDFLAGS := -mcpu=cortex-m3 -mthumb -T link.ld \
            -Wl,-Map=$(BUILD)/$(NAME).map \
            --specs=nano.specs --specs=nosys.specs
 
+# 仅有显式 WRAP 时启用测试链接包装；例如启动竞态夹具可拦截一次调度请求。
+# 不改变生产函数，也不要求内核带测试钩子。正常构建不设置 WRAP。
+WRAP ?=
+LDFLAGS += $(foreach sym,$(WRAP),-Wl,--wrap=$(sym))
+
 # 目标文件统一放在 build/，用“文件名.扩展名.o”之外的简化命名（去掉目录与扩展名）
 OBJS := $(patsubst %,$(BUILD)/%.o,$(notdir $(basename $(SRCS))))
 

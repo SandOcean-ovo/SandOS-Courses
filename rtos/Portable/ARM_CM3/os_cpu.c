@@ -54,6 +54,12 @@ uint32_t *OS_StackInit(void *task_function, void *task_param, uint32_t *stack_in
     return sp;
 }
 
+/**
+ * @brief 配置 SysTick 及调度异常优先级，保留调用者的全局屏蔽状态。
+ * @param ms tick 周期毫秒数；当前时钟换算／错误处理边界另有专项。
+ * @return 无；当前配置失败仍停止在既有错误路径。
+ * @note 不能自行开全局中断，否则会拆开 Start 的原子准备窗口。
+ */
 void OS_Init_Timer(uint32_t ms)
 {
     /* 重载值 = 每毫秒的时钟周期数 * 毫秒数。
@@ -73,7 +79,7 @@ void OS_Init_Timer(uint32_t ms)
 
     NVIC_SetPriority(SysTick_IRQn, 14);
 
-    __enable_irq(); // 开全局中断
+    /* 全局屏蔽由调用者配对恢复；这里不得无条件 enable。 */
 }
 
 void OS_Schedule(void)

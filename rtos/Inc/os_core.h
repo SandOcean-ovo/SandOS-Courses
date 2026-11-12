@@ -190,10 +190,17 @@ typedef struct MemBlock
 /** @} */ // end of group Memory
 
 
+/** @brief 调度状态；RUNNING=1 同时是两份 Cortex-M3 汇编的字节发布约定。 */
+typedef enum {
+    OS_SCHED_STOPPED = 0,  /**< 初始化后，可创建静态任务，tick 不运行。 */
+    OS_SCHED_RUNNING = 1,  /**< 上下文已就绪，可以处理 tick／ISR 重选。 */
+    OS_SCHED_STARTING = 2  /**< 首次 PendSV 尚未提交完整上下文，tick 忽略。 */
+} OS_SchedulerState;
+
 /* 全局变量声明 -------------------------------------------------------- */
 extern volatile uint32_t g_SystemTickCount;
 extern volatile uint32_t g_PrioMap;
-extern volatile uint8_t g_OSRunning;
+extern volatile uint8_t g_OSRunning; /**< 值为 OS_SchedulerState，不是任意非零皆运行。 */
 extern OS_List ReadyList[OS_MAX_PRIO];
 extern OS_List DelayList;
 extern OS_TCB *CurrentTCB;
@@ -262,7 +269,9 @@ void OS_Init(void);
 
 /**
  * @brief  开启调度器
- * @note   此函数不会返回。它会启动 SysTick 并开始执行第一个任务。
+ * @return 正常启动不返回；非法上下文或重复启动先断言。
+ * @note 必须在线程、未屏蔽调度且无用户外层临界区时调用；STOPPED→STARTING，
+ *       PendSV 恢复有效 PSP／寄存器后才发布 RUNNING。启动前 tick 不计时。
  */
 void OS_StartScheduler(void);
 

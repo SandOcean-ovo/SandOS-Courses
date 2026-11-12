@@ -30,7 +30,7 @@ static uint32_t g_CriticalSavedMask = 0;
 
 volatile uint32_t g_PrioMap = 0; // 任务位图
 
-volatile uint8_t g_OSRunning = FALSE; // 任务启动标志
+volatile uint8_t g_OSRunning = OS_SCHED_STOPPED; // 三态；仅 RUNNING 表示可调度。
 
 OS_List ReadyList[OS_MAX_PRIO]; // 任务就绪链表
 OS_List DelayList;              // 有序延时链表
@@ -201,7 +201,7 @@ void OS_TaskSuspend(OS_List *p_wait_list)
 {
     OS_ASSERT(p_wait_list != NULL);
 
-    if (g_OSRunning == FALSE)
+    if (g_OSRunning != OS_SCHED_RUNNING)
         return;
 
     CurrentTCB->State = TASK_BLOCKED;
@@ -251,7 +251,7 @@ void OS_YieldFromISR(uint8_t higher_prio_woken)
     if (higher_prio_woken == FALSE)
         return;
     uint32_t saved_mask = OS_SaveIRQ();
-    if (g_OSRunning != FALSE && CurrentTCB != NULL)
+    if (g_OSRunning == OS_SCHED_RUNNING && CurrentTCB != NULL)
     {
         NextTCB = FindNextTask();
         if (NextTCB != CurrentTCB)
@@ -294,10 +294,17 @@ OS_Status OS_TaskCreate(OS_TCB *tcb, OS_TaskFunc_t task_function, void *task_par
     return OS_OK;
 }
 
+/**
+ * @brief 在无并发、未启动阶段建立内核初始链表与 idle，清空调度指针和状态。
+ * @return 无。
+ * @note 不提供运行中重置语义；必须在任何应用任务创建之前调用。
+ */
 void OS_Init(void)
 {
     // 1. 初始化全局变量
-    g_OSRunning = FALSE;
+    g_OSRunning = OS_SCHED_STOPPED;
+    CurrentTCB = NULL;
+    NextTCB = NULL;
     g_SystemTickCount = 0;
     g_CriticalNesting = 0;
     g_CriticalSavedMask = 0;
@@ -316,40 +323,36 @@ void OS_Init(void)
     OS_TaskCreate(&IdleTaskTCB, IdleTask, NULL, IdleTaskStack, IDLE_STACK_SIZE, OS_MAX_PRIO - 1);
 }
 
+/**
+ * @brief 从未启动状态准备首次 PendSV；直到上下文恢复完成才允许 tick 调度。
+ * @return 正常不返回；重复启动或非法调用上下文先断言，再防御返回。
+ * @note Timer 不得自行开中断。准备期间使用局部保护，不修改任务临界区计数。
+ */
 void OS_StartScheduler(void)
 {
-    // 1. 此时 CurrentTCB 肯定不为 NULL 了，原来的防御性检查可以删除
-    // if (CurrentTCB == NULL) return;
-
-    // 2. 关键步骤：设置 NextTCB 为第一个要运行的任务
+    if (g_OSRunning != OS_SCHED_STOPPED || OS_GetExceptionNumber() != 0U ||
+        g_CriticalNesting != 0U || OS_IsSchedulingMasked() != 0U)
+    {
+        OS_ASSERT(0);
+        return;
+    }
+    uint32_t saved_mask = OS_SaveIRQ();
+    g_OSRunning = OS_SCHED_STARTING;
     NextTCB = FindNextTask();
-
-    // 3. 关键步骤：欺骗 PendSV
-    // 把 CurrentTCB 暂时设为 NULL
-    // 这样 PendSV 里的 "CMP R1, #0" 就会成立，从而跳转到 STMDB (保存上下文)
-    // 直接执行 RestoreContext (恢复 NextTCB 的上下文)
-    CurrentTCB = NULL;
-
-    // 4. 初始化 SysTick (开启时间片，开启 1ms 中断)
-    // 注意：SysTick_Handler 里有一个 if(CurrentTCB != NULL)
-    // 所以在 PendSV 执行完之前，SysTick 即使触发了也不会乱调度
+    CurrentTCB = NULL; /* 首次 PendSV 不保存尚不存在的任务上下文。 */
     OS_Init_Timer(1);
-
-    // 打开开关！
-    g_OSRunning = 1;
-
-    // 5. 触发 PendSV，开始第一次切换！
     OS_Schedule();
-
-    // 6. 应该永远不会执行到这里
-    while (1)
+    /* SysTick 比 PendSV 优先级高；即使二者同时 pending，STARTING 的 tick 也只忽略。
+     * RUNNING 由 PendSV 在 PSP／寄存器／异常返回方式全部就绪后发布。 */
+    OS_RestoreIRQ(saved_mask);
+    for (;;)
         ;
 }
 
 /**
  * @brief SysTick 推进时间、唤醒到期任务并选择下一就绪任务。
- * @return 无；未启动时无操作，启动中 CurrentTCB 检查仍遵循现有断言。
- * @note 与资源 ISR 用同一 PRIMASK 保护共享调度表；不借任务嵌套计数，不修启动窗口。
+ * @return 无；STOPPED／STARTING 时无操作，不累计启动前 tick。
+ * @note 仅 RUNNING 允许访问 CurrentTCB；与资源 ISR 共用独立 PRIMASK 保护，不借任务计数。
  */
 void OS_Tick_Handler(void)
 {
@@ -358,7 +361,7 @@ void OS_Tick_Handler(void)
     uint32_t benchmark_tick_start = 0U;
 #endif
 
-    if (g_OSRunning != TRUE)
+    if (g_OSRunning != OS_SCHED_RUNNING)
         return;
 
 #if OS_BENCHMARK_ENABLE
@@ -596,7 +599,7 @@ OS_Status OS_SemPost(OS_Sem *p_sem)
  */
 static void OS_RecordISRWakeup(OS_TCB *task, uint8_t *flag)
 {
-    if (flag != NULL && task != NULL && g_OSRunning != FALSE && CurrentTCB != NULL &&
+    if (flag != NULL && task != NULL && g_OSRunning == OS_SCHED_RUNNING && CurrentTCB != NULL &&
         task->Priority < CurrentTCB->Priority)
         *flag = TRUE;
 }

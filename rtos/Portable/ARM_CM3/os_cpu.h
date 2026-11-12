@@ -39,7 +39,9 @@ uint32_t* OS_StackInit(void* task_function, void* task_param, uint32_t* stack_in
 
 /**
  * @brief  初始化SysTick
- * @param  ms: 时间片长度（单位ms） 
+ * @param  ms: 时间片长度（单位ms）
+ * @return 无。
+ * @note 保持全局屏蔽状态；Start 配对恢复，不由定时器初始化强制开中断。
  */
 void OS_Init_Timer(uint32_t ms);
 

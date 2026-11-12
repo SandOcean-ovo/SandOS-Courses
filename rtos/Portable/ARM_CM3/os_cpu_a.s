@@ -25,6 +25,7 @@
 ; 5. 引入外部符号 (相当于 C 语言的 extern，我们要访问 C 里的变量)
     IMPORT  CurrentTCB  ; 在 C 里定义的全局变量叫 CurrentTCB
     IMPORT  NextTCB
+    IMPORT  g_OSRunning ; uint8_t 三态；RUNNING=1 与 os_core.h / GCC 汇编一致。
 
 
 ;===============================================================================
@@ -59,6 +60,11 @@ RestoreContext
     MSR PSP, R0
 
     ORR LR, LR, #0x04   ; 将LR的第2位置1，返回时使用PSP
+    ; CurrentTCB、R4-R11、PSP 与异常返回方式全部有效后才发布可调度。
+    ; R2/R3 属于硬件恢复的寄存器，不会破坏已加载的 R4-R11。
+    LDR R2, =g_OSRunning
+    MOVS R3, #1 ; OS_SCHED_RUNNING，保留原 g_OSRunning 的字节布局。
+    STRB R3, [R2]
     CPSIE I
     BX LR
     ENDP

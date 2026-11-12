@@ -3,9 +3,9 @@
  * @file    os_cpu_a_gcc.S
  * @brief   Cortex-M3 上下文切换汇编（GNU 汇编语法，供 arm-none-eabi-gcc 使用）
  *
- * 与同目录 os_cpu_a.s（armasm 语法）的逻辑完全一致，只是改写成 GNU as 语法：
- *   - 原文件保留作参考，不参与 GCC 构建，也不纳入首版 AC5 兼容承诺；
- *   - AC6 工程使用哪种汇编语法，需在 Keil 工程中显式选择，不在此处用条件编译掩盖。
+ * 与同目录 os_cpu_a.s（armasm 语法）显式维护同一上下文与启动发布约定：
+ *   - GCC 工程选择本文件；Keil/AC5 选择 armasm 文件，编译和运行证据分开记录；
+ *   - AC6 仍是可选适配，不在此处用零散条件编译掩盖汇编语法差异。
  *
  * 【硬件自动完成的部分】
  *   Cortex-M3 进入异常时，硬件把 xPSR、PC、LR、R12、R3、R2、R1、R0
@@ -46,6 +46,7 @@
 
     .extern CurrentTCB          /* 当前任务控制块指针，定义在 os_core.c */
     .extern NextTCB             /* 下一个要运行的任务控制块指针，定义在 os_core.c */
+    .extern g_OSRunning         /* uint8_t 三态；RUNNING=1 与 os_core.h 显式约定。 */
 
     /* 每个函数放进独立的 section，配合 -ffunction-sections / --gc-sections 可裁剪 */
     .section .text.PendSV_Handler,"ax",%progbits
@@ -95,7 +96,11 @@ RestoreContext:
     msr     psp, r0             /* PSP = R0，异常返回时硬件从这里弹出 R0-R3,R12,LR,PC,xPSR */
 
     orr     lr, lr, #0x04       /* EXC_RETURN 的 bit2 置 1：返回线程模式并使用 PSP */
-    cpsie   i                   /* 开中断 */
+PendSV_StackReady:             /* 测试／调试锚点：PSP 和寄存器已就绪，尚未发布可调度。 */
+    ldr     r2, =g_OSRunning
+    movs    r3, #1              /* OS_SCHED_RUNNING；R0-R3 由硬件帧在异常返回时恢复。 */
+    strb    r3, [r2]            /* 必须位于恢复完成之后、开放中断之前。 */
+    cpsie   i                   /* 现在即使 SysTick 抢占，CurrentTCB／PSP 都已有效。 */
 
     /* 调试锚点：此标签不产生任何指令，只用于让 GDB 能在“PSP 已切换、尚未异常返回”
      * 的位置下断点（break PendSV_Exit）。此时 CurrentTCB 已是新任务，R4-R11 已恢复，
