@@ -274,13 +274,15 @@ void OS_Tick_Handler(void);
 
 /**
  * @brief  进入临界区
- * @note   关闭全局中断并增加嵌套计数。
+ * @return 无；仅特权线程使用，ISR 误用断言。
+ * @note 最外层保存 PRIMASK，再屏蔽并增加嵌套计数；禁止在其中阻塞。
  */
 void OS_EnterCritical(void);
 
 /**
  * @brief  退出临界区
- * @note   减少嵌套计数，当计数为 0 时恢复全局中断。
+ * @return 无；未配对退出或 ISR 误用断言。
+ * @note 最后退出恢复进入前 PRIMASK，不无条件开中断；内部嵌套仍保持屏蔽。
  */
 void OS_ExitCritical(void);
 

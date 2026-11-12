@@ -36,6 +36,8 @@ void HardFault_Handler(void);
 void SysTick_Handler(void);
 /** @brief 默认 SVCall 报告未使用异常；目标测试可用强符号覆盖，内核调度不使用 SVC。 */
 void SVC_Handler(void) __attribute__((weak, alias("Default_Handler")));
+/** @brief IRQ0 默认仍报告故障；测试可软件挂起此 NVIC IRQ 验证真实异常嵌套，不启用 UART 外设。 */
+void UARTRX0_Handler(void) __attribute__((weak, alias("Default_Handler")));
 
 /**
  * @brief 中断向量表
@@ -58,6 +60,7 @@ void (*const g_vectors[])(void) = {
     0,                          /* 13: 保留 */
     PendSV_Handler,             /* 14: PendSV —— 任务切换 */
     SysTick_Handler,            /* 15: SysTick —— 系统节拍 */
+    UARTRX0_Handler,             /* 16: 外部 IRQ0，默认未使能 */
 };
 
 /**

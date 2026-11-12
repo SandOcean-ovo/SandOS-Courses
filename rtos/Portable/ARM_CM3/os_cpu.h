@@ -77,4 +77,18 @@ uint32_t OS_GetExceptionNumber(void);
  * @note 本端口 PendSV 处于最低可配置优先级；不是进入／退出临界区操作。
  */
 uint32_t OS_IsSchedulingMasked(void);
+/**
+ * @brief 读取 PRIMASK 后屏蔽可配置异常，供配对局部保护使用。
+ * @return 进入前的 PRIMASK 原值。
+ * @note 特权线程或普通 ISR 可调用；ISR 的保存值在自己的栈中，不访问任务嵌套计数。
+ */
+uint32_t OS_SaveIRQ(void);
+
+/**
+ * @brief 将 PRIMASK 恢复为对应进入保护前的原值。
+ * @param saved_mask 同一执行流对应 OS_SaveIRQ 的返回值，嵌套按 LIFO 配对。
+ * @return 无。
+ * @note 不操作 BASEPRI／FAULTMASK；恢复开中断可能立即执行 pending IRQ。
+ */
+void OS_RestoreIRQ(uint32_t saved_mask);
 #endif /* __OS_CPU_H */

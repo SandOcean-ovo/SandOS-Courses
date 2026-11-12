@@ -114,3 +114,26 @@ uint32_t OS_IsSchedulingMasked(void)
 {
     return (__get_PRIMASK() != 0U || __get_BASEPRI() != 0U || __get_FAULTMASK() != 0U) ? 1U : 0U;
 }
+
+/**
+ * @brief 原样保存 PRIMASK 并屏蔽可配置异常。
+ * @return 调用前的 PRIMASK。
+ * @note 读取与屏蔽之间允许被 ISR 抢占；ISR 必须配对恢复自己的状态，不修改任务计数。
+ */
+uint32_t OS_SaveIRQ(void)
+{
+    uint32_t saved_mask = __get_PRIMASK();
+    __disable_irq();
+    return saved_mask;
+}
+
+/**
+ * @brief 恢复相应保护区进入前的 PRIMASK。
+ * @param saved_mask 对应 OS_SaveIRQ 返回的原值。
+ * @return 无。
+ * @note 使用 CMSIS intrinsic 保留编译器的屏蔽操作语义，不使用无条件 enable。
+ */
+void OS_RestoreIRQ(uint32_t saved_mask)
+{
+    __set_PRIMASK(saved_mask);
+}

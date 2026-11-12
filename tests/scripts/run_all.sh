@@ -98,6 +98,10 @@ pos MUTEX-01 ../../tests/target/mutex_handoff.c "EVENT 1" "EVENT 10"
 pos MUTEX-02 ../../tests/target/mutex_bounds.c
 pos CTX-01 ../../tests/target/blocking_context.c
 pos CTX-05 ../../tests/target/blocking_context_legal.c
+pos CRIT-01 ../../tests/target/critical_restore.c
+pos CRIT-02 ../../tests/target/irq_restore.c
+neg CRITNEG-01 ../../tests/target/negative/neg_critical_exit.c 1
+neg CRITNEG-02 ../../tests/target/negative/neg_critical_isr.c 1
 neg NEG-01 ../../tests/target/negative/neg_hang.c           2            # 卡死 -> 超时
 neg NEG-02 ../../tests/target/negative/neg_fail.c           1            # 主动失败
 neg NEG-03 ../../tests/target/negative/neg_fault.c          1            # HardFault

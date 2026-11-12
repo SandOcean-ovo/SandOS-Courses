@@ -24,7 +24,9 @@
 
 volatile uint32_t g_SystemTickCount = 0; // 系统心跳计数器
 
-volatile uint32_t g_CriticalNesting = 0; // 临界区嵌套计数器
+volatile uint32_t g_CriticalNesting = 0; // 仅任务临界区；ISR 使用局部保存值。
+/* 只在最外层进入时写入；单核上禁止在任务临界区内阻塞或切换任务。 */
+static uint32_t g_CriticalSavedMask = 0;
 
 volatile uint32_t g_PrioMap = 0; // 任务位图
 
@@ -273,6 +275,7 @@ void OS_Init(void)
     g_OSRunning = FALSE;
     g_SystemTickCount = 0;
     g_CriticalNesting = 0;
+    g_CriticalSavedMask = 0;
     g_PrioMap = 0; // 清空位图
 
     // 2. 初始化就绪链表
@@ -436,21 +439,45 @@ void OS_Delay(uint32_t ticks)
     OS_ExitCritical(); /* 修改成我们的进入退出临界区函数 */
 }
 
+/**
+ * @brief 进入特权线程的嵌套临界区，只在最外层保存调用者的 PRIMASK。
+ * @return 无；ISR 或计数溢出误用时断言。
+ * @note 先屏蔽再修改计数，内层不得覆盖最外层原值；不修改 BASEPRI／FAULTMASK。
+ */
 void OS_EnterCritical(void)
 {
-    OS_Disable_IRQ();
+    if (OS_GetExceptionNumber() != 0U)
+    {
+        OS_ASSERT(0); /* ISR 必须使用自己的保存值，不能借用任务计数。 */
+        return;
+    }
+    uint32_t saved_mask = OS_SaveIRQ();
+    if (g_CriticalNesting == UINT32_MAX)
+    {
+        OS_ASSERT(0);
+        OS_RestoreIRQ(saved_mask);
+        return;
+    }
+    if (g_CriticalNesting == 0U)
+        g_CriticalSavedMask = saved_mask;
     g_CriticalNesting++;
 }
 
+/**
+ * @brief 退出线程临界区；最后一层恢复最外层进入前的 PRIMASK。
+ * @return 无；ISR 或未配对退出时断言。
+ * @note 先更新计数再恢复屏蔽，恢复为 0 时 pending IRQ／PendSV 可能立即执行。
+ */
 void OS_ExitCritical(void)
 {
-    OS_ASSERT(g_CriticalNesting != 0);
-
-    g_CriticalNesting--;
-    if (g_CriticalNesting == 0)
+    if (OS_GetExceptionNumber() != 0U || g_CriticalNesting == 0U)
     {
-        OS_Enable_IRQ();
+        OS_ASSERT(0);
+        return;
     }
+    g_CriticalNesting--;
+    if (g_CriticalNesting == 0U)
+        OS_RestoreIRQ(g_CriticalSavedMask);
 }
 
 /**

@@ -120,4 +120,4 @@ int main(void) {
 
 MIT License - 欢迎学习、修改和商业使用。
 
-阻塞／调度接口 `OS_Delay`、`OS_SemWait`、`OS_MutexPend`、`OS_QueueReceive`、`OS_MemGet` 仅允许可调度的线程调用。Cortex-M3 入口检查 ISR、用户外层临界区及中断屏蔽状态；状态接口返回 `OS_ERR_ISR`／`OS_ERR_CRITICAL`，取块返回 NULL，void 延时触发断言，均在修改状态之前拒绝。详见阶段 0《M1接口契约》和阶段 2 验证记录；完整 ISR 保护、临界区屏蔽恢复仍待修复。
+阻塞／调度接口 `OS_Delay`、`OS_SemWait`、`OS_MutexPend`、`OS_QueueReceive`、`OS_MemGet` 仅允许可调度的线程调用。Cortex-M3 入口检查 ISR、用户外层临界区及中断屏蔽状态；状态接口返回 `OS_ERR_ISR`／`OS_ERR_CRITICAL`，取块返回 NULL，void 延时触发断言，均在修改状态之前拒绝。详见阶段 0《M1接口契约》和阶段 2 验证记录；任务临界区已保存／恢复最外层原 PRIMASK，ISR 使用独立 OS_SaveIRQ／OS_RestoreIRQ 配对原语；完整 FromISR 保护与调度仍待专项。

@@ -59,3 +59,8 @@ uint32_t OS_GetExceptionNumber(void) { return 0U; }
  * @note 不用此桩证明 PRIMASK／BASEPRI／FAULTMASK 的硬件行为。
  */
 uint32_t OS_IsSchedulingMasked(void) { return 0U; }
+
+/** @brief 纯 C 桩：主机无 IRQ。 @return 固定 0。 @note 真实屏蔽恢复由 QEMU 验证。 */
+uint32_t OS_SaveIRQ(void) { return 0U; }
+/** @brief 纯 C 桩：不修改主机状态。 @param saved_mask 未使用。 @return 无。 @note 不模拟异常屏蔽。 */
+void OS_RestoreIRQ(uint32_t saved_mask) { (void)saved_mask; }
